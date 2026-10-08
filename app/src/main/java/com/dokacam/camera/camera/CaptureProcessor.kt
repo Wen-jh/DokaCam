@@ -114,13 +114,12 @@ class CaptureProcessor(private val context: Context) {
         val out = src.copy(Bitmap.Config.ARGB_8888, true)
         val canvas = Canvas(out)
         val h = src.height
-        val textSize = h * 0.035f
-
+        val stampSize = h * 0.035f
         val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.rgb(255, 180, 80)
-            textSize = textSize
+            textSize = stampSize
             typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
-            setShadowLayer(textSize * 0.06f, 0f, 0f, Color.argb(90, 255, 140, 40))
+            setShadowLayer(stampSize * 0.06f, 0f, 0f, Color.argb(90, 255, 140, 40))
         }
 
         if (options.dateStamp) {
