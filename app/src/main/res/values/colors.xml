@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="doka_black">#FF000000</color>
+    <color name="doka_accent">#FFF2C14E</color>
+    <color name="doka_white">#FFFFFFFF</color>
+    <color name="ic_launcher_background">#FF1A1A1A</color>
+</resources>

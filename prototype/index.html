@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>DokaCam 交互原型</title>
+<style>
+  :root{
+    --gold:#F2C14E; --bg:#000; --panel:rgba(0,0,0,.55);
+    --surface:#1a1a1a; --text:#f2f2f2; --muted:#9a9a9a;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;user-select:none}
+  body{
+    background:#111;display:flex;justify-content:center;align-items:center;
+    min-height:100vh;font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
+  }
+  .phone{
+    width:412px;height:892px;background:var(--bg);border-radius:44px;overflow:hidden;
+    position:relative;box-shadow:0 40px 120px rgba(0,0,0,.8),0 0 0 10px #1c1c1c,0 0 0 12px #333;
+  }
+  /* ---------- 取景器 ---------- */
+  .viewfinder{
+    position:absolute;inset:0;overflow:hidden;background:#222;
+  }
+  #feed{width:100%;height:100%;object-fit:cover;transform:scale(1.02);}
+  #feedCanvas{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;}
+  /* 网格 */
+  .grid{position:absolute;inset:0;pointer-events:none;opacity:.35}
+  .grid svg{width:100%;height:100%}
+  /* AI 引导 */
+  .ai-box{position:absolute;border:2px solid var(--gold);border-radius:4px;
+    box-shadow:0 0 0 2000px rgba(0,0,0,.08);transition:all .6s cubic-bezier(.2,.8,.2,1)}
+  .ai-tip{
+    position:absolute;left:50%;top:16%;transform:translateX(-50%);
+    background:rgba(0,0,0,.65);border:1px solid rgba(242,193,78,.4);border-radius:20px;
+    padding:6px 16px;color:var(--gold);font-size:13px;backdrop-filter:blur(8px);
+    display:flex;gap:6px;align-items:center;white-space:nowrap;
+  }
+  .ai-score{position:absolute;right:14px;top:14px;color:var(--gold);font-size:12px;
+    background:rgba(0,0,0,.5);padding:4px 10px;border-radius:12px;backdrop-filter:blur(6px)}
+  /* ---------- 顶部栏 ---------- */
+  .topbar{
+    position:absolute;top:0;left:0;right:0;padding:52px 14px 8px;
+    display:flex;justify-content:space-between;align-items:center;z-index:10;
+  }
+  .chip{display:flex;flex-direction:column;align-items:center;gap:2px;color:#fff;
+    padding:6px 10px;border-radius:12px;cursor:pointer;transition:background .2s}
+  .chip:active{background:rgba(255,255,255,.15)}
+  .chip svg{width:22px;height:22px;stroke:#fff;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+  .chip span{font-size:10px;opacity:.9}
+  .chip.active svg{stroke:var(--gold)}
+  .chip.active span{color:var(--gold)}
+  .topgroup{display:flex;gap:2px;background:var(--panel);border-radius:16px;padding:2px;backdrop-filter:blur(10px)}
+  .dots{color:#fff;font-size:22px;padding:4px 12px;cursor:pointer;line-height:1}
+  /* ---------- 底部 ---------- */
+  .bottom{
+    position:absolute;left:0;right:0;bottom:0;z-index:10;
+    background:linear-gradient(transparent, rgba(0,0,0,.85) 30%);
+    padding-bottom:max(20px, env(safe-area-inset-bottom));
+  }
+  /* AI 推荐条 */
+  .rec-row{display:flex;gap:8px;padding:10px 14px 4px;overflow-x:auto}
+  .rec{
+    display:flex;align-items:center;gap:6px;padding:6px 14px;border-radius:16px;
+    background:rgba(255,255,255,.1);color:#fff;font-size:12px;cursor:pointer;
+    border:1px solid rgba(255,255,255,.08);white-space:nowrap;transition:all .2s;
+  }
+  .rec .star{color:var(--gold);font-size:12px}
+  .rec.on{background:var(--gold);color:#000;font-weight:600}
+  .rec.on .star{color:#000}
+  /* 焦段条 */
+  .zoom{display:flex;justify-content:center;gap:6px;padding:6px 0}
+  .zoom button{
+    width:40px;height:40px;border-radius:50%;border:none;background:transparent;
+    color:#fff;font-size:13px;cursor:pointer;transition:all .25s;
+  }
+  .zoom button.on{background:rgba(255,255,255,.22);color:var(--gold);font-weight:700;transform:scale(1.12)}
+  /* 快门排 */
+  .controls{display:flex;justify-content:space-between;align-items:center;padding:10px 36px 12px}
+  .thumb{width:50px;height:50px;border-radius:14px;border:1px solid rgba(255,255,255,.4);
+    overflow:hidden;cursor:pointer;background:#1a1a1a;position:relative}
+  .thumb canvas{width:100%;height:100%;object-fit:cover}
+  .thumb .n{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+    color:#555;font-size:20px}
+  .shutter{
+    width:76px;height:76px;border-radius:50%;border:4px solid #fff;padding:5px;cursor:pointer;
+    background:transparent;transition:transform .1s;
+  }
+  .shutter:active{transform:scale(.92)}
+  .shutter i{display:block;width:100%;height:100%;border-radius:50%;background:#fff}
+  .flip{width:50px;height:50px;border-radius:50%;background:rgba(255,255,255,.12);
+    border:none;cursor:pointer;display:flex;align-items:center;justify-content:center}
+  .flip svg{width:26px;height:26px;stroke:#fff;fill:none;stroke-width:1.6}
+  /* 滤镜抽屉 */
+  .filters{padding:2px 8px 4px}
+  .fscroll{display:flex;gap:8px;overflow-x:auto;scrollbar-width:none;padding:4px 6px}
+  .fscroll::-webkit-scrollbar{display:none}
+  .fitem{display:flex;flex-direction:column;align-items:center;gap:4px;cursor:pointer;min-width:56px}
+  .fitem .ball{
+    width:46px;height:46px;border-radius:50%;position:relative;
+    background:conic-gradient(from 210deg,#c98d5a,#e8b968,#8fa3b8,#5a6c7d);
+    border:2px solid transparent;transition:all .2s;display:flex;align-items:center;justify-content:center;
+    color:#fff;font-size:12px;text-shadow:0 1px 2px rgba(0,0,0,.5)
+  }
+  .fitem.on .ball{border-color:var(--gold);box-shadow:0 0 14px rgba(242,193,78,.35)}
+  .fitem .ball .badge{position:absolute;top:-3px;right:-3px;width:11px;height:11px;
+    border-radius:50%;background:var(--gold);border:2px solid #000}
+  .fitem span{font-size:10px;color:#bbb;white-space:nowrap}
+  .fitem.on span{color:var(--gold)}
+  .fhead{color:#666;font-size:11px;align-self:center;margin:0 6px;white-space:nowrap}
+  /* 强度滑杆 */
+  .intensity{display:flex;align-items:center;gap:10px;padding:2px 28px 8px;color:#999;font-size:11px}
+  .intensity input{flex:1;accent-color:var(--gold);height:3px}
+  /* 快门闪光 */
+  .flashfx{position:absolute;inset:0;background:#fff;opacity:0;pointer-events:none;z-index:99}
+  .flashfx.go{animation:flash .35s ease-out}
+  @keyframes flash{0%{opacity:.95}100%{opacity:0}}
+  /* toast */
+  .toast{position:absolute;left:50%;top:44%;transform:translate(-50%,-50%);
+    background:rgba(0,0,0,.75);color:#fff;padding:10px 24px;border-radius:22px;
+    font-size:14px;z-index:100;opacity:0;transition:opacity .25s;backdrop-filter:blur(8px)}
+  .toast.show{opacity:1}
+  /* 说明角标 */
+  .hint{position:fixed;bottom:12px;left:50%;transform:translateX(-50%);color:#666;font-size:12px;text-align:center}
+</style>
+</head>
+<body>
+<div class="phone" id="phone">
+  <div class="viewfinder">
+    <canvas id="feedCanvas"></canvas>
+    <div class="grid" id="grid"></div>
+    <div class="ai-box" id="aiBox"></div>
+    <div class="ai-tip" id="aiTip">✦ 未检测到明显主体，试试靠近一点</div>
+    <div class="ai-score" id="aiScore">构图 60</div>
+  </div>
+
+  <div class="flashfx" id="flashFx"></div>
+  <div class="toast" id="toast"></div>
+
+  <div class="topbar">
+    <div class="topgroup">
+      <div class="chip" id="chipFlash">
+        <svg viewBox="0 0 24 24"><path d="M13 2 4.5 13.5H11L10 22l9.5-12H13.5z"/></svg>
+        <span>关闭</span>
+      </div>
+    </div>
+    <div class="topgroup">
+      <div class="chip active" id="chipAi">
+        <svg viewBox="0 0 24 24"><path d="M12 2c.9 4.2 3.8 7.1 8 8-4.2.9-7.1 3.8-8 8-.9-4.2-3.8-7.1-8-8 4.2-.9 7.1-3.8 8-8z"/></svg>
+        <span>AI</span>
+      </div>
+      <div class="chip" id="chipGrid">
+        <svg viewBox="0 0 24 24"><path d="M3 9h18M3 15h18M9 3v18M15 3v18"/></svg>
+        <span>三分法</span>
+      </div>
+      <div class="chip" id="chipTimer">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="13" r="7"/><path d="M12 13l3.5-3.5M9 3h6M12 3v2.5"/></svg>
+        <span>关</span>
+      </div>
+    </div>
+    <div class="dots" id="btnSettings">···</div>
+  </div>
+
+  <div class="bottom">
+    <div class="rec-row" id="recRow"></div>
+    <div class="zoom" id="zoomBar"></div>
+    <div class="controls">
+      <div class="thumb" id="thumb"><span class="n">🖼</span></div>
+      <button class="shutter" id="shutter"><i></i></button>
+      <button class="flip" id="btnFlip">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.2"/><path d="M20 12a8 8 0 0 1-14.5 4.6M4 12a8 8 0 0 1 14.5-4.6M2.5 12l3-3v6zM21.5 12l-3 3v-6z"/></svg>
+      </button>
+    </div>
+    <div class="filters"><div class="fscroll" id="fscroll"></div></div>
+    <div class="intensity" id="intensityRow">
+      <span>强度</span>
+      <input type="range" id="intensity" min="0" max="100" value="100">
+      <span id="intensityVal">100%</span>
+    </div>
+  </div>
+</div>
+<div class="hint">DokaCam 交互原型 · 滤镜用 CSS 近似模拟（真实 App 为 OpenGL 管线）</div>
+
+<script>
+/* ================= 模拟相机画面（程序化生成街景） ================= */
+const cv = document.getElementById('feedCanvas');
+const cx = cv.getContext('2d');
+function resizeCv(){
+  const r = cv.parentElement.getBoundingClientRect();
+  cv.width = r.width; cv.height = r.height;
+}
+resizeCv(); window.addEventListener('resize', resizeCv);
+
+let t = 0;
+/* 渐变天空 + 建筑剪影 + 地面 + 一个“主体”（模拟检测框） */
+function drawScene(){
+  const w = cv.width, h = cv.height;
+  // 天空
+  const sky = cx.createLinearGradient(0,0,0,h*.62);
+  sky.addColorStop(0,'#33465e'); sky.addColorStop(.55,'#8b7d8f'); sky.addColorStop(1,'#d9a06f');
+  cx.fillStyle = sky; cx.fillRect(0,0,w,h*.62);
+  // 太阳
+  const sunX = w*.5 + Math.sin(t*.3)*w*.18;
+  cx.fillStyle='rgba(255,220,160,.9)';
+  cx.beginPath(); cx.arc(sunX, h*.5, 26, 0, 7); cx.fill();
+  // 远山
+  cx.fillStyle='#5a5670';
+  cx.beginPath(); cx.moveTo(0,h*.52);
+  for(let i=0;i<=10;i++){ cx.lineTo(w*i/10, h*.52 - Math.abs(Math.sin(i*1.7+t*.05))*h*.1); }
+  cx.lineTo(w,h*.62); cx.lineTo(0,h*.62); cx.fill();
+  // 建筑群
+  cx.fillStyle='#2e2b3d';
+  for(let i=0;i<9;i++){
+    const bw = w/9, bh = h*(.14+.2*absSin(i*2.3));
+    cx.fillRect(i*bw+2, h*.62-bh, bw-4, bh);
+    // 窗
+    cx.fillStyle='rgba(255,200,120,'+(.25+.5*absSin(i*5+t))+')';
+    for(let wx=0; wx<3; wx++) for(let wy=0; wy<4; wy++)
+      cx.fillRect(i*bw+8+wx*(bw/4), h*.62-bh+10+wy*18, bw/8, 8);
+    cx.fillStyle='#2e2b3d';
+  }
+  // 地面
+  cx.fillStyle='#1c1a26'; cx.fillRect(0,h*.62,w,h*.38);
+  // 路灯
+  for(let i=0;i<5;i++){
+    const lx = w*(.1+.2*i), ly=h*.62;
+    cx.strokeStyle='#3a3748'; cx.lineWidth=3;
+    cx.beginPath(); cx.moveTo(lx,ly); cx.lineTo(lx,ly-h*.14); cx.stroke();
+    const gl = cx.createRadialGradient(lx,ly-h*.14,2,lx,ly-h*.14,30);
+    gl.addColorStop(0,'rgba(255,190,90,.8)'); gl.addColorStop(1,'transparent');
+    cx.fillStyle=gl; cx.beginPath(); cx.arc(lx,ly-h*.14,30,0,7); cx.fill();
+  }
+  // 「行人主体”（被 AI 检测的对象）
+  const px = w*(.5+.22*Math.sin(t*.5)), py = h*.78;
+  cx.fillStyle='#c9b8a3';
+  cx.beginPath(); cx.arc(px, py-46, 9, 0, 7); cx.fill();          // 头
+  cx.fillRect(px-10, py-36, 20, 26);                              // 身
+  cx.fillRect(px-9, py-10, 7, 16); cx.fillRect(px+2, py-10, 7,16);// 腿
+  cx.fillStyle='#8d7b68'; cx.fillRect(px-10,py-36,20,8);
+  return {x:px, y:py-56, w:26, h:76};
+}
+function absSin(v){ return Math.abs(Math.sin(v)); }
+
+/* ================= 滤镜定义（CSS filter 近似 + overlay） ================= */
+const FILTERS = [
+  {g:'原片', n:'原片', css:'', ov:'none'},
+  {g:'胶片', n:'柯达 Portra', css:'saturate(.92) contrast(.95) brightness(1.06) sepia(.12) hue-rotate(-6deg)', ov:'linear-gradient(rgba(255,180,120,.06),rgba(60,50,90,.10))'},
+  {g:'胶片', n:'柯达 Gold', css:'saturate(1.1) contrast(1.04) brightness(1.02) sepia(.22)', ov:'linear-gradient(rgba(255,200,110,.12),rgba(80,40,60,.06))'},
+  {g:'胶片', n:'富士 Superia', css:'saturate(1.08) contrast(1.06) hue-rotate(6deg) brightness(1.02)', ov:'linear-gradient(rgba(120,200,220,.10),rgba(40,80,120,.08))'},
+  {g:'胶片', n:'CineStill', css:'saturate(1.05) contrast(1.06) brightness(1.04) hue-rotate(-10deg)', ov:'radial-gradient(circle at 65% 30%, rgba(255,80,60,.14), rgba(20,40,120,.16))'},
+  {g:'胶片', n:'拍立得', css:'saturate(.8) contrast(.84) brightness(1.14) sepia(.08)', ov:'linear-gradient(rgba(255,250,240,.10),rgba(180,170,160,.12))'},
+  {g:'CCD', n:'经典 CCD', css:'saturate(1.22) contrast(1.14)', ov:'radial-gradient(circle, transparent 55%, rgba(0,0,0,.30))'},
+  {g:'CCD', n:'千禧卡片机', css:'saturate(1.08) contrast(1.02) brightness(1.05) sepia(.06) hue-rotate(-4deg)', ov:'radial-gradient(circle, transparent 60%, rgba(120,60,90,.14))'},
+  {g:'CCD', n:'闪光夜拍', css:'saturate(1.12) contrast(1.26) brightness(.96)', ov:'radial-gradient(circle at 50% 40%, transparent 30%, rgba(0,0,0,.5))'},
+  {g:'CCD', n:'VHS', css:'saturate(1.14) contrast(.96) brightness(1.04) hue-rotate(8deg) blur(.4px)', ov:'repeating-linear-gradient(0deg, rgba(0,0,0,.14) 0 1px, transparent 1px 3px), linear-gradient(rgba(0,255,180,.05),rgba(255,0,120,.06))'},
+  {g:'黑白', n:'Ilford HP5', css:'grayscale(1) contrast(1.1)', ov:''},
+  {g:'黑白', n:'柯达 Tri-X', css:'grayscale(1) contrast(1.28)', ov:'radial-gradient(circle, transparent 50%, rgba(0,0,0,.25))'},
+  {g:'黑白', n:'棕褐怀旧', css:'grayscale(1) sepia(.72) contrast(1.02) brightness(1.04)', ov:''},
+  {g:'创意', n:'Doka 人像', css:'saturate(1.02) contrast(1.02) brightness(1.08) sepia(.06)', ov:'linear-gradient(rgba(255,210,170,.08),rgba(0,0,0,0))'},
+  {g:'创意', n:'青橙电影', css:'saturate(1.1) contrast(1.12)', ov:'linear-gradient(rgba(0,140,180,.14),rgba(255,140,40,.10))'},
+  {g:'创意', n:'日系清透', css:'saturate(.88) contrast(.92) brightness(1.18)', ov:'linear-gradient(rgba(255,255,250,.12),rgba(160,200,210,.08))'},
+  {g:'创意', n:'赛博霓虹', css:'saturate(1.26) contrast(1.16) hue-rotate(-12deg)', ov:'linear-gradient(rgba(255,0,140,.12),rgba(0,120,255,.14))'},
+];
+let curFilter = 0, intensity = 1;
+
+function applyFilterStyle(){
+  const f = FILTERS[curFilter];
+  const mix = ` opacity(${intensity})`;
+  cv.style.filter = (f.css||'none');
+  let ov = document.getElementById('ovLayer');
+  if(!ov){ ov = document.createElement('div'); ov.id='ovLayer';
+    ov.style.cssText='position:absolute;inset:0;pointer-events:none;mix-blend-mode:soft-light';
+    cv.parentElement.appendChild(ov); }
+  ov.style.background = f.ov==='none'?'':(f.ov||'');
+  ov.style.opacity = intensity;
+}
+
+/* ================= 滤镜抽屉 ================= */
+const fscroll = document.getElementById('fscroll');
+(function buildFilters(){
+  let lastGroup = null;
+  FILTERS.forEach((f,i)=>{
+    if(f.g!==lastGroup){
+      const h = document.createElement('div'); h.className='fhead'; h.textContent=f.g;
+      fscroll.appendChild(h); lastGroup=f.g;
+    }
+    const it = document.createElement('div');
+    it.className='fitem'+(i===0?' on':''); it.dataset.i=i;
+    const hue = [0,28,35,190,320,40,10,330,0,300,0,0,30,20,200,180,310][i]||0;
+    it.innerHTML = `<div class="ball" style="background:conic-gradient(from ${hue}deg,hsl(${hue},45%,55%),hsl(${(hue+60)%360},40%,45%),hsl(${(hue+180)%360},40%,50%),hsl(${hue},45%,55%))">
+      ${i===0?'':f.n.slice(0,2)}</div><span>${f.n}</span>`;
+    it.onclick = ()=>{
+      document.querySelectorAll('.fitem').forEach(e=>e.classList.remove('on'));
+      it.classList.add('on'); curFilter=i; applyFilterStyle();
+      document.getElementById('intensityRow').style.display = i===0?'none':'flex';
+    };
+    fscroll.appendChild(it);
+  });
+})();
+document.getElementById('intensity').oninput = e=>{
+  intensity = e.target.value/100;
+  document.getElementById('intensityVal').textContent = e.target.value+'%';
+  applyFilterStyle();
+};
+
+/* ================= 焦段条 ================= */
+const ZOOMS=['0.5x','1x','2x','3x'];
+const zoomBar = document.getElementById('zoomBar');
+ZOOMS.forEach((z,i)=>{
+  const b=document.createElement('button'); b.textContent=z; if(i===1)b.classList.add('on');
+  b.onclick=()=>{ zoomBar.querySelectorAll('button').forEach(e=>e.classList.remove('on'));
+    b.classList.add('on'); cv.style.transform=`scale(${[1,1.02,1.35,1.9][i]})`; };
+  zoomBar.appendChild(b);
+});
+
+/* ================= AI 模拟 ================= */
+const aiBox=document.getElementById('aiBox'), aiTip=document.getElementById('aiTip'),
+      aiScore=document.getElementById('aiScore');
+const TIPS=[
+  '✦ 相机向左移，让主体落在三分点','✦ 相机向右移，让主体落在三分点',
+  '✦ 主体太小，靠近或放大','✦ 构图不错，保持','✦ 镜头稍微抬高'];
+let tipIdx=0;
+function updateAi(){
+  const s = drawScene();
+  // 主体框跟随“行人”
+  aiBox.style.left=(s.x-30)+'px'; aiBox.style.top=(s.y-20)+'px';
+  aiBox.style.width=(s.w+60)+'px'; aiBox.style.height=(s.h+40)+'px';
+}
+setInterval(()=>{
+  tipIdx=(tipIdx+1)%TIPS.length; aiTip.textContent=TIPS[tipIdx];
+  const sc=[62,74,88,95,81][Math.floor(Math.random()*5)];
+  aiScore.textContent='构图 '+sc;
+},2600);
+
+/* ================= AI 推荐条 ================= */
+const RECS=[{n:'CineStill',r:'夜景适配'},{n:'青橙电影',r:'色温和谐'},{n:'经典 CCD',r:'增强色彩'}];
+const recRow=document.getElementById('recRow');
+RECS.forEach((r,i)=>{
+  const e=document.createElement('div'); e.className='rec'+(i===0?' on':'');
+  e.innerHTML=`<span class="star">✦</span>${r.n}`;
+  e.title=r.r;
+  e.onclick=()=>{ recRow.querySelectorAll('.rec').forEach(x=>x.classList.remove('on'));
+    e.classList.add('on');
+    const idx = FILTERS.findIndex(f=>f.n===r.n);
+    if(idx>=0) document.querySelector(`.fitem[data-i="${idx}"]`).click();
+  };
+  recRow.appendChild(e);
+});
+
+/* ================= 网格 ================= */
+const GRIDS=[
+ {n:'三分法',svg:'<line x1="33.3%" y1="0" x2="33.3%" y2="100%"/><line x1="66.6%" y1="0" x2="66.6%" y2="100%"/><line x1="0" y1="33.3%" x2="100%" y2="33.3%"/><line x1="0" y1="66.6%" x2="100%" y2="66.6%"/>'},
+ {n:'黄金分割',svg:'<line x1="38.2%" y1="0" x2="38.2%" y2="100%"/><line x1="61.8%" y1="0" x2="61.8%" y2="100%"/><line x1="0" y1="38.2%" x2="100%" y2="38.2%"/><line x1="0" y1="61.8%" x2="100%" y2="61.8%"/>'},
+ {n:'对角线',svg:'<line x1="0" y1="0" x2="100%" y2="100%"/><line x1="100%" y1="0" x2="0" y2="100%"/>'},
+ {n:'关闭',svg:''}
+];
+let gridIdx=0;
+const gridEl=document.getElementById('grid');
+function renderGrid(){
+  gridEl.innerHTML = GRIDS[gridIdx].svg
+    ? `<svg stroke="rgba(255,255,255,.5)" stroke-width="1">${GRIDS[gridIdx].svg}</svg>` : '';
+  document.querySelector('#chipGrid span').textContent = GRIDS[gridIdx].n;
+}
+renderGrid();
+document.getElementById('chipGrid').onclick=()=>{ gridIdx=(gridIdx+1)%GRIDS.length; renderGrid(); };
+
+/* ================= 顶部开关 ================= */
+const FLASHS=['关闭','自动','开启','常亮'];
+let flashIdx=0;
+document.getElementById('chipFlash').onclick=e=>{
+  flashIdx=(flashIdx+1)%FLASHS.length;
+  e.currentTarget.querySelector('span').textContent=FLASHS[flashIdx];
+  if(flashIdx===3) e.currentTarget.classList.add('active');
+  else e.currentTarget.classList.remove('active');
+};
+document.getElementById('chipAi').onclick=e=>{
+  const on=e.currentTarget.classList.toggle('active');
+  aiBox.style.display=on?'':'none';
+  aiTip.style.display=on?'':'none';
+  aiScore.style.display=on?'':'none';
+  recRow.style.display=on?'flex':'none';
+};
+const TIMERS=['关','3s','10s']; let timerIdx=0;
+document.getElementById('chipTimer').onclick=e=>{
+  timerIdx=(timerIdx+1)%TIMERS.length;
+  e.currentTarget.querySelector('span').textContent=TIMERS[timerIdx];
+};
+
+/* ================= 拍照 ================= */
+const toast=document.getElementById('toast');
+function showToast(msg){ toast.textContent=msg; toast.classList.add('show');
+  setTimeout(()=>toast.classList.remove('show'),1300); }
+document.getElementById('shutter').onclick=()=>{
+  const fx=document.getElementById('flashFx');
+  fx.classList.remove('go'); void fx.offsetWidth; fx.classList.add('go');
+  if(TIMERS[timerIdx]!=='关'){ showToast(TIMERS[timerIdx]+' 秒后拍摄'); }
+  setTimeout(()=>showToast('已保存到相册 ✓'),380);
+  // 缩略图
+  const th=document.getElementById('thumb');
+  const c2=document.createElement('canvas'); c2.width=100;c2.height=100;
+  c2.getContext('2d').drawImage(cv,0,0,100,100);
+  th.innerHTML=''; c2.className=''; th.appendChild(c2);
+};
+document.getElementById('btnFlip').onclick=()=>showToast('已切换镜头（前置镜像）');
+document.getElementById('btnSettings').onclick=()=>showToast('设置（见 Android 工程 SettingsScreen）');
+document.getElementById('thumb').onclick=()=>showToast('相册（见 Android 工程 GalleryScreen）');
+
+/* ================= 主循环 ================= */
+function loop(){ t+=.016; updateAi(); applyFilterLive(); requestAnimationFrame(loop); }
+let lastFilterStyle='';
+function applyFilterLive(){
+  const s = cv.style.filter;
+  if(s!==lastFilterStyle){ lastFilterStyle=s; }
+}
+loop();
+applyFilterStyle();
+document.getElementById('intensityRow').style.display='none';
+</script>
+</body>
+</html>

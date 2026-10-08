@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">DokaCam</string>
+
+    <!-- 权限 -->
+    <string name="perm_camera_title">需要相机权限</string>
+    <string name="perm_camera_desc">DokaCam 需要访问相机才能取景拍摄。我们不会上传你的任何照片。</string>
+    <string name="perm_storage_title">需要相册权限</string>
+    <string name="perm_storage_desc">用于浏览、编辑和分享你拍摄的照片。</string>
+    <string name="perm_location_title">需要位置权限</string>
+    <string name="perm_location_desc">仅用于在照片上写入地理位置水印，可随时关闭。</string>
+    <string name="perm_grant">授予权限</string>
+    <string name="perm_denied">权限被拒绝，请前往系统设置手动开启</string>
+    <string name="perm_go_settings">前往设置</string>
+
+    <!-- 拍摄界面 -->
+    <string name="shutter">快门</string>
+    <string name="switch_camera">切换镜头</string>
+    <string name="open_gallery">打开相册</string>
+    <string name="open_settings">设置</string>
+    <string name="flash">闪光灯</string>
+    <string name="timer">定时</string>
+    <string name="grid">网格</string>
+    <string name="level">水平仪</string>
+    <string name="aspect">画幅</string>
+    <string name="ai_composition">AI 构图</string>
+    <string name="filter">滤镜</string>
+    <string name="zoom">变焦</string>
+
+    <!-- 状态 -->
+    <string name="saving">正在保存…</string>
+    <string name="saved">已保存到相册</string>
+    <string name="save_failed">保存失败：%1$s</string>
+    <string name="lens_unavailable">该焦段在当前设备上不可用</string>
+
+    <!-- 相册 -->
+    <string name="gallery">相册</string>
+    <string name="gallery_empty">还没有照片\n按下快门，开始记录</string>
+    <string name="delete">删除</string>
+    <string name="share">分享</string>
+    <string name="favorite">收藏</string>
+    <string name="edit">编辑</string>
+    <string name="info">信息</string>
+    <string name="delete_confirm_title">删除这张照片？</string>
+    <string name="delete_confirm_msg">删除后无法恢复。</string>
+    <string name="cancel">取消</string>
+    <string name="confirm">确定</string>
+
+    <!-- 编辑 -->
+    <string name="edit_adjust">调节</string>
+    <string name="edit_filter">滤镜</string>
+    <string name="edit_crop">裁剪</string>
+    <string name="edit_rotate">旋转</string>
+    <string name="edit_reset">重置</string>
+    <string name="edit_save">保存副本</string>
+    <string name="brightness">亮度</string>
+    <string name="contrast">对比度</string>
+    <string name="saturation">饱和度</string>
+    <string name="warmth">色温</string>
+    <string name="tint">色调</string>
+    <string name="highlights">高光</string>
+    <string name="shadows">阴影</string>
+    <string name="vignette">暗角</string>
+    <string name="grain">颗粒</string>
+    <string name="sharpen">锐化</string>
+    <string name="fade">褪色</string>
+    <string name="intensity">强度</string>
+
+    <!-- 设置 -->
+    <string name="settings">设置</string>
+    <string name="settings_shooting">拍摄</string>
+    <string name="settings_image">画质</string>
+    <string name="settings_watermark">水印</string>
+    <string name="settings_about">关于</string>
+    <string name="setting_save_original">保存原图</string>
+    <string name="setting_save_original_desc">同时保留未经滤镜处理的原片</string>
+    <string name="setting_shutter_sound">快门音效</string>
+    <string name="setting_mirror_front">前置镜像</string>
+    <string name="setting_mirror_front_desc">自拍时水平翻转，符合镜子习惯</string>
+    <string name="setting_photo_format">照片格式</string>
+    <string name="setting_jpeg_quality">JPEG 画质</string>
+    <string name="setting_date_stamp">日期水印</string>
+    <string name="setting_date_stamp_desc">复古胶片日期戳，如 ’98 7 14</string>
+    <string name="setting_location_stamp">位置水印</string>
+    <string name="setting_model_stamp">机型水印</string>
+    <string name="setting_ccd_mode">CCD 低清模式</string>
+    <string name="setting_ccd_mode_desc">刻意降低分辨率并增强噪点，还原早期数码相机质感</string>
+    <string name="setting_ai_composition">AI 构图引导</string>
+    <string name="setting_ai_recommend">AI 滤镜推荐</string>
+    <string name="setting_beauty">人像美颜</string>
+    <string name="setting_version">版本</string>
+    <string name="setting_open_source">开源许可</string>
+
+    <!-- 通用 -->
+    <string name="on">开</string>
+    <string name="off">关</string>
+    <string name="auto">自动</string>
+    <string name="done">完成</string>
+    <string name="close">关闭</string>
+    <string name="retry">重试</string>
+</resources>

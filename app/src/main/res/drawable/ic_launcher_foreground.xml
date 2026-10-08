@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 图标：极简相机光圈 + 胶片孔，呼应「胶片相机」定位 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- 镜筒外环 -->
+    <path
+        android:fillColor="#FFF2C14E"
+        android:pathData="M54,30 A24,24 0 1,1 53.99,30 Z M54,36 A18,18 0 1,0 54.01,36 Z" />
+
+    <!-- 光圈叶片（三角遮挡形成六边形光孔） -->
+    <path
+        android:fillColor="#FFF2C14E"
+        android:pathData="M54,42 L64.4,48 L64.4,60 L54,66 L43.6,60 L43.6,48 Z" />
+
+    <!-- 胶片齿孔 -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M30,72 h6 v5 h-6 Z M42,72 h6 v5 h-6 Z M54,72 h6 v5 h-6 Z M66,72 h6 v5 h-6 Z" />
+</vector>
