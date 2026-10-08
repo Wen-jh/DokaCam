@@ -125,7 +125,7 @@ class OffscreenFilterSession(shareContext: EGLContext? = null) {
         val surface = egl.createPbufferSurface(w, h)
         try {
             egl.makeCurrent(surface)
-            GLES30SetViewport(w, h)
+setViewport(w, h)
 
             val prog = program ?: FilterProgram2D().also { program = it }
             prog.use()
@@ -154,7 +154,7 @@ class OffscreenFilterSession(shareContext: EGLContext? = null) {
         egl.release()
     }
 
-    private fun GLES30SetViewport(w: Int, h: Int) {
+    private fun setViewport(w: Int, h: Int) {
         android.opengl.GLES30.glViewport(0, 0, w, h)
         android.opengl.GLES30.glClearColor(0f, 0f, 0f, 1f)
         android.opengl.GLES30.glClear(android.opengl.GLES30.GL_COLOR_BUFFER_BIT)

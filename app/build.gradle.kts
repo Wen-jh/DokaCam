@@ -112,4 +112,5 @@ dependencies {
     // 其他
     implementation(libs.coil.compose)
     implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.kotlinx.coroutines.guava)
 }

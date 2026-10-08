@@ -96,10 +96,11 @@ fun FilterStrip(
                 .padding(vertical = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            items(presetsWithHeaders(presets), key = { it.key }) { (_, _, preset) ->
+            items(presetsWithHeaders(presets), key = { it.key }) { item ->
+                val preset = item.preset
                 if (preset == null) {
                     Text(
-                        label,
+                        item.label,
                         color = Color(0xFF777777),
                         fontSize = 11.sp,
                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 14.dp),

@@ -1,6 +1,5 @@
 package com.dokacam.camera.camera
 
-import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.ImageFormat
@@ -10,7 +9,6 @@ import android.graphics.YuvImage
 import android.util.Log
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
-import androidx.camera.view.PreviewView
 import java.io.ByteArrayOutputStream
 
 /**

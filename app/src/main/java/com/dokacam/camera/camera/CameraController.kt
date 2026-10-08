@@ -14,6 +14,7 @@ import androidx.camera.core.SurfaceRequest
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.lifecycle.LifecycleOwner
 import com.dokacam.camera.gl.CameraGlView
+import kotlinx.coroutines.guava.await
 import java.io.File
 import java.util.concurrent.Executor
 import kotlin.math.roundToInt
@@ -71,7 +72,7 @@ class CameraController(private val context: Context) {
         initialFacing: Int = CameraSelector.LENS_FACING_BACK,
         onAnalysisFrame: ((android.graphics.Bitmap) -> Unit)? = null,
     ) {
-        val p = ProcessCameraProvider.awaitInstance(context)
+        val p = ProcessCameraProvider.getInstance(context).await()
         provider = p
 
         facing = initialFacing
@@ -191,7 +192,7 @@ class CameraController(private val context: Context) {
         normX: Float,   // 0..1
         normY: Float,
     ) {
-        val factory = androidx.camera.view.SurfaceOrientedMeteringPointFactory(
+        val factory = androidx.camera.core.SurfaceOrientedMeteringPointFactory(
             glView.width.toFloat(), glView.height.toFloat(),
         )
         val point = factory.createPoint(normX * glView.width, normY * glView.height)

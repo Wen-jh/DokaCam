@@ -109,14 +109,14 @@ class CompositionAnalyzer {
     private suspend fun detectObjects(bmp: Bitmap): List<RectF> =
         suspendCancellableCoroutine { cont ->
             objectDetector.process(InputImage.fromBitmap(bmp, 0))
-                .addOnSuccessListener { list -> cont.resume(list.map { it.boundingBox }) }
+                .addOnSuccessListener { list -> cont.resume(list.map { android.graphics.RectF(it.boundingBox) }) }
                 .addOnFailureListener { cont.resume(emptyList()) } // 失败降级，不阻塞取景
         }
 
     private suspend fun detectFaces(bmp: Bitmap): List<RectF> =
         suspendCancellableCoroutine { cont ->
             faceDetector.process(InputImage.fromBitmap(bmp, 0))
-                .addOnSuccessListener { list -> cont.resume(list.map { it.boundingBox }) }
+                .addOnSuccessListener { list -> cont.resume(list.map { android.graphics.RectF(it.boundingBox) }) }
                 .addOnFailureListener { cont.resume(emptyList()) }
         }
 

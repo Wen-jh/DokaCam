@@ -18,10 +18,6 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -71,7 +67,7 @@ fun GalleryScreen(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = Color.White)
+                Text("←", color = Color.White, fontSize = 22.sp)
             }
             Text("相册", color = Color.White, fontSize = 18.sp)
             Spacer(Modifier.weight(1f))
@@ -144,12 +140,12 @@ fun GalleryScreen(
                         context.startActivity(Intent.createChooser(send, "分享照片"))
                     },
                     modifier = Modifier.size(52.dp),
-                ) { Icon(Icons.Filled.Share, null, tint = Color.White) }
+                ) { Text("↗", color = Color.White, fontSize = 22.sp) }
                 Spacer(Modifier.size(48.dp))
                 IconButton(
                     onClick = { confirmDelete = item; viewing = null },
                     modifier = Modifier.size(52.dp),
-                ) { Icon(Icons.Filled.Delete, null, tint = Color.White) }
+                ) { Text("🗑", color = Color.White, fontSize = 20.sp) }
             }
         }
     }

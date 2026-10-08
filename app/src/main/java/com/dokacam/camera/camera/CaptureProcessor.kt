@@ -53,40 +53,44 @@ class CaptureProcessor(private val context: Context) {
             BitmapFactory.Options().apply { inSampleSize = sample },
         ) ?: return null
 
-        var bmp = raw
+        var current: Bitmap = raw
 
         // 2. CCD 低清：降采样再升回，形成「糊出来的低像素」
         if (options.ccdMode) {
             val scale = 0.35f
             val small = Bitmap.createScaledBitmap(
-                bmp,
-                (bmp.width * scale).toInt().coerceAtLeast(320),
-                (bmp.height * scale).toInt().coerceAtLeast(240),
+                current,
+                (current.width * scale).toInt().coerceAtLeast(320),
+                (current.height * scale).toInt().coerceAtLeast(240),
                 true,
             )
-            bmp = Bitmap.createScaledBitmap(small, bmp.width, bmp.height, false)
+            val up = Bitmap.createScaledBitmap(small, current.width, current.height, false)
             small.recycle()
+            if (up !== current) {
+                current.recycle()
+                current = up
+            }
         }
 
         // 3. 滤镜（全质量）
         if (options.intensity > 0.01f) {
-            val out = render(bmp, options)
+            val out = render(current, options)
             if (out != null) {
-                bmp.recycle()
-                bmp = out
+                current.recycle()
+                current = out
             }
         }
 
         // 4. 水印
         if (options.dateStamp || options.modelStamp) {
-            val stamped = drawStamps(bmp, options)
-            if (stamped != bmp) {
-                bmp.recycle()
-                bmp = stamped
+            val stamped = drawStamps(current, options)
+            if (stamped !== current) {
+                current.recycle()
+                current = stamped
             }
         }
 
-        bmp
+        current
     } catch (t: Throwable) {
         Log.e(TAG, "process failed", t)
         null
