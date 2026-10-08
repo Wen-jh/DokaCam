@@ -104,8 +104,9 @@ dependencies {
     implementation(libs.camera.extensions)
 
     // ML Kit —— AI 构图引导 / 场景识别 / 滤镜推荐
+    // 注意：别名不能用 object-detection（object 是 Kotlin 关键字，accessor 非法）
     implementation(libs.mlkit.face.detection)
-    implementation(libs.mlkit.object.detection)
+    implementation(libs.mlkit.objectdetection)
     implementation(libs.mlkit.image.labeling)
 
     // 其他

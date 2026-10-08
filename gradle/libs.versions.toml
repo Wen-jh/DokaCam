@@ -65,7 +65,7 @@ camera-extensions = { module = "androidx.camera:camera-extensions", version.ref 
 
 # ML Kit
 mlkit-face-detection = { module = "com.google.mlkit:face-detection", version.ref = "mlkitFace" }
-mlkit-object-detection = { module = "com.google.mlkit:object-detection", version.ref = "mlkitObject" }
+mlkit-objectdetection = { module = "com.google.mlkit:object-detection", version.ref = "mlkitObject" }
 mlkit-image-labeling = { module = "com.google.mlkit:image-labeling", version.ref = "mlkitLabel" }
 
 # 其他
