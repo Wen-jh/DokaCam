@@ -7,6 +7,10 @@ on:
     branches: [ main, master ]
   workflow_dispatch:
 
+# GITHUB_TOKEN 需要写权限才能创建 Release
+permissions:
+  contents: write
+
 jobs:
   build:
     name: Build & Release
