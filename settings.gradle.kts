@@ -1,12 +1,6 @@
 pluginManagement {
     repositories {
-        google {
-            content {
-                includeGroupByRegex("com\\.android.*")
-                includeGroupByRegex("com\\.google.*")
-                includeGroupByRegex("androidx.*")
-            }
-        }
+        google()
         mavenCentral()
         gradlePluginPortal()
         // 国内镜像（网络不佳时可取消注释）

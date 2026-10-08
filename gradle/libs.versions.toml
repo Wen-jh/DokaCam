@@ -1,11 +1,11 @@
 [versions]
 # --- 构建工具链 ---
-agp = "8.13.2"
+agp = "9.4.1"
 kotlin = "2.3.21"
 ksp = "2.3.21-2.0.4"
 
 # --- Android SDK ---
-compileSdk = "36"
+compileSdk = "37"
 minSdk = "26"
 targetSdk = "36"
 
