@@ -286,8 +286,8 @@ object FilterPresets {
 
             // ================= 创意 =================
             p(
-                "doka_portrait", "Doka 人像", FilterGroup.CREATIVE,
-                "对标 Doka 人像模式：肤色透亮，质感保留", "Doka Portrait",
+                "doka_portrait", "AI 人像", FilterGroup.CREATIVE,
+                "AI 人像模式：肤色透亮，质感保留", "AI Portrait",
             ) {
                 exposure = 0.10f; contrast = 1.02f; saturation = 1.02f; vibrance = 0.06f
                 temperature = 0.08f
@@ -297,8 +297,8 @@ object FilterPresets {
                 soften = 0.06f; grain = 0.10f
             },
             p(
-                "doka_food", "Doka 食物", FilterGroup.CREATIVE,
-                "提升食物质感与暖光氛围", "Doka Food",
+                "doka_food", "美食", FilterGroup.CREATIVE,
+                "提升食物质感与暖光氛围", "Food",
             ) {
                 exposure = 0.08f; contrast = 1.10f; saturation = 1.16f; vibrance = 0.10f
                 temperature = 0.18f

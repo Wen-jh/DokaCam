@@ -22,6 +22,8 @@ android {
         versionName = "1.0.0"
 
         vectorDrawables.useSupportLibrary = true
+        // 只保留真机 ABI：砍掉 x86/x86_64 模拟器库（MediaPipe native 占 ~28MB）
+        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
     }
 
     buildTypes {
@@ -61,9 +63,9 @@ android {
         }
     }
 
-    // LUT (.cube) 等滤镜资源不压缩，便于流式读取
+    // LUT (.cube) 等滤镜资源与 AI 模型不压缩，便于流式读取/mmap
     androidResources {
-        noCompress += listOf("cube", "png", "bin")
+        noCompress += listOf("cube", "png", "bin", "tflite", "task")
     }
 
     lint {
@@ -104,11 +106,8 @@ dependencies {
     implementation(libs.camera.view)
     implementation(libs.camera.extensions)
 
-    // ML Kit —— AI 构图引导 / 场景识别 / 滤镜推荐
-    // 注意：别名不能用 object-detection（object 是 Kotlin 关键字，accessor 非法）
-    implementation(libs.mlkit.face.detection)
-    implementation(libs.mlkit.objectdetection)
-    implementation(libs.mlkit.image.labeling)
+    // MediaPipe Tasks Vision —— AI 构图引导 / 场景识别（离线模型在 assets/）
+    implementation(libs.mediapipe.tasks.vision)
 
     // 其他
     implementation(libs.coil.compose)

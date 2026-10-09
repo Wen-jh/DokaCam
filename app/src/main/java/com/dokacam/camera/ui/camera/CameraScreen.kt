@@ -5,6 +5,7 @@ import android.app.Activity
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.RectF
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -18,6 +19,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
@@ -47,6 +49,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -56,7 +59,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -72,7 +77,10 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.dokacam.camera.ai.ShotAdvice
+import com.dokacam.camera.ai.ShotCoach
 import com.dokacam.camera.camera.CameraController
+import com.dokacam.camera.data.model.GuideDirection
 import com.dokacam.camera.gl.CameraGlView
 import java.io.File
 import kotlin.math.abs
@@ -88,7 +96,41 @@ fun CameraScreen() {
     val scope = rememberCoroutineScope()
 
     val controller = remember { CameraController(context) }
-    val glView = remember { CameraGlView(context).apply { controller.glView = this } }
+    val glView = remember {
+        CameraGlView(context).also { glv ->
+            glv.controller = controller // EGL 重建时回调 rebindForNewSurface
+            controller.glView = glv
+        }
+    }
+
+    // ---- AI 拍摄教练：构图评分 + 焦距/曝光建议 ----
+    val aiOn = remember { mutableStateOf(true) }
+    val coach = remember { ShotCoach(context, scope) }
+    DisposableEffect(controller) {
+        controller.onAnalysisFrame = { bmp ->
+            if (aiOn.value) coach.submit(bmp) else bmp.recycle()
+        }
+        onDispose {
+            controller.onAnalysisFrame = null
+            coach.close()
+        }
+    }
+
+    // GLSurfaceView 生命周期契约：暂停/恢复随宿主生命周期
+    DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            when (event) {
+                androidx.lifecycle.Lifecycle.Event.ON_PAUSE -> glView.onPause()
+                androidx.lifecycle.Lifecycle.Event.ON_RESUME -> glView.onResume()
+                else -> {}
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            glView.onPause()
+        }
+    }
 
     LaunchedEffect(Unit) {
         (context as? Activity)?.window?.let { WindowCompat.setDecorFitsSystemWindows(it, false) }
@@ -200,6 +242,7 @@ fun CameraScreen() {
     }
 
     var viewSize by remember { mutableStateOf(IntSize.Zero) }
+    val advice by coach.advice.collectAsState()
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
 
@@ -236,6 +279,18 @@ fun CameraScreen() {
         )
 
         if (gridOn) GridOverlay()
+
+        // AI 主体框（金框标出检测到的人脸/物体，帮助小白对准）
+        if (aiOn.value) {
+            SubjectOverlay(
+                subjects = advice.subjects,
+                faces = advice.faces,
+                mirror = controller.frontFacing,
+                frameAspect = 3f / 4f,
+                viewAspect = if (viewSize.height != 0)
+                    viewSize.width.toFloat() / viewSize.height.toFloat() else 3f / 4f,
+            )
+        }
 
         focusPoint?.let { p ->
             val ringScale = lerp(1.35f, 1f, ringAnim.value)
@@ -286,7 +341,23 @@ fun CameraScreen() {
                 ) {
                     timerSec = when (timerSec) { 0 -> 3; 3 -> 10; else -> 0 }; poke()
                 }
+                PillButton(text = if (aiOn.value) "AI 助手" else "AI 关", active = aiOn.value) {
+                    aiOn.value = !aiOn.value
+                    if (!aiOn.value) coach.clear()
+                    poke()
+                }
             }
+        }
+
+        // AI 教练卡：评分 + 一句话引导 + 参数建议（构图到位亮金）
+        if (aiOn.value) {
+            AiCoachCard(
+                advice = advice,
+                currentZoom = activeZoom,
+                modifier = Modifier.align(Alignment.TopCenter)
+                    .statusBarsPadding()
+                    .padding(top = 56.dp, start = 16.dp, end = 16.dp),
+            )
         }
 
         Column(
@@ -339,6 +410,11 @@ fun CameraScreen() {
                             }
                         }
                     }
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "≈${ShotCoach.equivMm(activeZoom)}mm",
+                        color = Color.White.copy(alpha = 0.75f), fontSize = 10.sp
+                    )
                     Spacer(Modifier.height(10.dp))
                     Box(
                         Modifier.size(28.dp).clip(CircleShape).background(Color.Black.copy(alpha = 0.35f))
@@ -369,9 +445,14 @@ fun CameraScreen() {
                 val interaction = remember { MutableInteractionSource() }
                 val pressed by interaction.collectIsPressedAsState()
                 val shutterScale by animateFloatAsState(if (pressed) 0.88f else 1f, label = "shutter")
+                val readyToShoot = aiOn.value && advice.ready
                 Box(
                     Modifier.size(74.dp).scale(shutterScale).clip(CircleShape)
                         .background(Color.White.copy(alpha = if (controlsVisible) 1f else 0.55f))
+                        .then(
+                            if (readyToShoot) Modifier.border(3.dp, Color(0xFFF2C14E), CircleShape)
+                            else Modifier
+                        )
                         .clickable(interactionSource = interaction, indication = null) { startCapture() }
                 )
                 Box(
@@ -417,3 +498,120 @@ private fun GridOverlay() {
         }
     }
 }
+
+/**
+ * AI 主体框：金框标出人脸/物体，让小白一眼看清「拍的是什么」。
+ * 前摄预览镜像，框也要镜像回来才能对上。
+ * 预览是 FILL_CENTER 中心裁剪：先把分析帧坐标重映射进可视子矩形再画，
+ * 否则在全面屏上框会横向漂移。
+ */
+@Composable
+private fun SubjectOverlay(
+    subjects: List<RectF>,
+    faces: List<RectF>,
+    mirror: Boolean,
+    frameAspect: Float,
+    viewAspect: Float,
+) {
+    if (subjects.isEmpty() && faces.isEmpty()) return
+    Canvas(Modifier.fillMaxSize()) {
+        val w = size.width
+        val h = size.height
+
+        // 与 CameraGlView 的 FILL_CENTER 一致：把归一化帧坐标映射到屏幕归一化坐标
+        val ca = frameAspect
+        val va = viewAspect
+        var ax = 0f; var sx = 1f; var ay = 0f; var sy = 1f
+        if (ca > va) {
+            val visW = va / ca
+            ax = (1f - visW) / 2f; sx = 1f / visW
+        } else if (va > ca) {
+            val visH = ca / va
+            ay = (1f - visH) / 2f; sy = 1f / visH
+        }
+        fun mapX(x: Float) = ((x - ax) * sx).coerceIn(0f, 1f)
+        fun mapY(y: Float) = ((y - ay) * sy).coerceIn(0f, 1f)
+
+        fun box(r: RectF, color: Color, stroke: Float) {
+            val l = if (mirror) (1f - mapX(r.right)) * w else mapX(r.left) * w
+            val rt = if (mirror) (1f - mapX(r.left)) * w else mapX(r.right) * w
+            drawRoundRect(
+                color = color,
+                topLeft = Offset(l, mapY(r.top) * h),
+                size = Size(rt - l, (mapY(r.bottom) - mapY(r.top)) * h),
+                cornerRadius = CornerRadius(5.dp.toPx()),
+                style = Stroke(width = stroke),
+            )
+        }
+        subjects.forEach { box(it, Color(0xFFF2C14E).copy(alpha = 0.5f), 1.5.dp.toPx()) }
+        faces.forEach { box(it, Color(0xFFF2C14E).copy(alpha = 0.95f), 2.dp.toPx()) }
+    }
+}
+
+/**
+ * AI 教练卡：构图评分 + 一句话引导 + 焦距/曝光参数建议。
+ * 构图到位时亮金 —— 小白看到金边就可以直接按快门。
+ */
+@Composable
+private fun AiCoachCard(
+    advice: ShotAdvice,
+    currentZoom: Float,
+    modifier: Modifier = Modifier,
+) {
+    if (advice.score == 0 && advice.advice.isEmpty()) return
+
+    val gold = Color(0xFFF2C14E)
+    Column(
+        modifier
+            .clip(RoundedCornerShape(14.dp))
+            .background(Color.Black.copy(alpha = if (advice.ready) 0.72f else 0.42f))
+            .padding(horizontal = 14.dp, vertical = 9.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("✦", color = gold, fontSize = 13.sp)
+            Spacer(Modifier.size(5.dp))
+            Text("${advice.score}", color = gold, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+            if (advice.directions.isNotEmpty()) {
+                Spacer(Modifier.size(7.dp))
+                Text(
+                    advice.directions.joinToString(" ") { glyphFor(it) },
+                    color = gold, fontSize = 13.sp, fontWeight = FontWeight.Medium,
+                )
+            }
+            Spacer(Modifier.size(8.dp))
+            Text(
+                if (advice.ready) "✓ 构图到位，可以拍了" else advice.advice,
+                color = Color.White, fontSize = 13.sp, maxLines = 1,
+            )
+        }
+        val chips = buildList {
+            advice.sceneLabel?.let { add(it) }
+            advice.suggestedZoom?.let { add("建议 ${fmtZoom(it)}x · ${ShotCoach.equivMm(it)}mm") }
+            advice.exposureTip?.let { add(it) }
+            if (advice.suggestedZoom == null) add("≈${ShotCoach.equivMm(currentZoom)}mm")
+        }
+        if (chips.isNotEmpty()) {
+            Spacer(Modifier.size(4.dp))
+            Text(
+                chips.joinToString(" · "),
+                color = Color.White.copy(alpha = 0.72f), fontSize = 11.sp, maxLines = 1,
+            )
+        }
+    }
+}
+
+private fun glyphFor(d: GuideDirection): String = when (d) {
+    GuideDirection.MOVE_LEFT -> "←"
+    GuideDirection.MOVE_RIGHT -> "→"
+    GuideDirection.MOVE_UP -> "↑"
+    GuideDirection.MOVE_DOWN -> "↓"
+    GuideDirection.ZOOM_IN -> "⊕"
+    GuideDirection.ZOOM_OUT -> "⊖"
+    GuideDirection.TILT_LEVEL -> "⌣"
+    GuideDirection.HOLD_STEADY -> "●"
+    GuideDirection.NONE -> ""
+}
+
+private fun fmtZoom(z: Float): String =
+    if (z == z.toInt().toFloat()) "${z.toInt()}" else "$z"

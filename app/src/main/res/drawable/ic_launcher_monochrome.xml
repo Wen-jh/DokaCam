@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AICam 单色图标（Android 13+ 主题图标）：白色镜头剪影 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M54,33 A21,21 0 1,1 53.91,33 Z M54,36.5 A17.5,17.5 0 1,0 53.91,36.5 Z" />
+
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M64,54 L59,62.66 L49,62.66 L44,54 L49,45.34 L59,45.34 Z" />
+
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M76,34 Q77.1,39.3 82,40.5 Q77.1,41.7 76,47 Q74.9,41.7 70,40.5 Q74.9,39.3 76,34 Z" />
+</vector>

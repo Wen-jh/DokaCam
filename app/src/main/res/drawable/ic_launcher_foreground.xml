@@ -1,23 +1,34 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 图标：极简相机光圈 + 胶片孔，呼应「胶片相机」定位 -->
+<!-- AICam 图标：AI 镜头（金色镜圈 + 光圈叶片 + AI 微光点） -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
 
-    <!-- 镜筒外环 -->
+    <!-- 镜片玻璃 -->
+    <path
+        android:fillColor="#FF232830"
+        android:pathData="M54,33 A21,21 0 1,1 53.91,33 Z" />
+
+    <!-- 镜圈 -->
     <path
         android:fillColor="#FFF2C14E"
-        android:pathData="M54,30 A24,24 0 1,1 53.99,30 Z M54,36 A18,18 0 1,0 54.01,36 Z" />
+        android:pathData="M54,28 A26,26 0 1,1 53.99,28 Z M54,33 A21,21 0 1,0 53.91,33 Z" />
 
-    <!-- 光圈叶片（三角遮挡形成六边形光孔） -->
+    <!-- 光圈叶片（六边形光孔） -->
     <path
         android:fillColor="#FFF2C14E"
-        android:pathData="M54,42 L64.4,48 L64.4,60 L54,66 L43.6,60 L43.6,48 Z" />
+        android:pathData="M64,54 L59,62.66 L49,62.66 L44,54 L49,45.34 L59,45.34 Z" />
 
-    <!-- 胶片齿孔 -->
+    <!-- 光圈中心 -->
+    <path
+        android:fillColor="#FF232830"
+        android:pathData="M57.5,54 A3.5,3.5 0 1,1 57.49,54 Z" />
+
+    <!-- AI 微光点 -->
     <path
         android:fillColor="#FFFFFFFF"
-        android:pathData="M30,72 h6 v5 h-6 Z M42,72 h6 v5 h-6 Z M54,72 h6 v5 h-6 Z M66,72 h6 v5 h-6 Z" />
+        android:fillAlpha="0.95"
+        android:pathData="M76,34 Q77.1,39.3 82,40.5 Q77.1,41.7 76,47 Q74.9,41.7 70,40.5 Q74.9,39.3 76,34 Z" />
 </vector>

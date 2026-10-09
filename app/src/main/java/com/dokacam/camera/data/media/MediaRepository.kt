@@ -93,7 +93,7 @@ class MediaRepository(private val context: Context) {
                 put(MediaStore.Images.Media.DISPLAY_NAME, displayName)
                 put(MediaStore.Images.Media.MIME_TYPE, mime)
                 if (android.os.Build.VERSION.SDK_INT >= 29) {
-                    put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/DokaCam")
+                    put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/AICam")
                     put(MediaStore.Images.Media.IS_PENDING, 1)
                 } else {
                     @Suppress("DEPRECATION")

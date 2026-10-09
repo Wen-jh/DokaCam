@@ -22,10 +22,8 @@ exifinterface = "1.4.2"
 # --- Camera ---
 camerax = "1.6.2"
 
-# --- ML Kit (AI 构图 / 场景识别) ---
-mlkitFace = "16.1.7"
-mlkitObject = "17.0.2"
-mlkitLabel = "17.0.9"
+# --- MediaPipe (AI 构图 / 场景识别，端侧 TFLite) ---
+mediapipeTasksVision = "0.10.35"
 
 # --- 其他 ---
 coil = "2.7.0"
@@ -64,10 +62,8 @@ camera-lifecycle = { module = "androidx.camera:camera-lifecycle", version.ref = 
 camera-view = { module = "androidx.camera:camera-view", version.ref = "camerax" }
 camera-extensions = { module = "androidx.camera:camera-extensions", version.ref = "camerax" }
 
-# ML Kit
-mlkit-face-detection = { module = "com.google.mlkit:face-detection", version.ref = "mlkitFace" }
-mlkit-objectdetection = { module = "com.google.mlkit:object-detection", version.ref = "mlkitObject" }
-mlkit-image-labeling = { module = "com.google.mlkit:image-labeling", version.ref = "mlkitLabel" }
+# MediaPipe Tasks Vision（人脸关键点 + 物体检测，离线模型打包在 assets/）
+mediapipe-tasks-vision = { module = "com.google.mediapipe:tasks-vision", version.ref = "mediapipeTasksVision" }
 
 # 其他
 coil-compose = { module = "io.coil-kt:coil-compose", version.ref = "coil" }

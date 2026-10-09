@@ -34,6 +34,13 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
+      # AI 模型体积大，漏提交时 fail-fast 而不是静默出一个没有 AI 的包
+      - name: Sanity check AI models
+        run: |
+          test -s app/src/main/assets/face_landmarker.task || { echo "::error::face_landmarker.task missing"; exit 1; }
+          test -s app/src/main/assets/efficientdet_lite0.tflite || { echo "::error::efficientdet_lite0.tflite missing"; exit 1; }
+          ls -lh app/src/main/assets/
+
       - name: Build debug APK
         run: ./gradlew :app:assembleDebug --stacktrace
 
@@ -71,12 +78,15 @@ jobs:
           body: |
             自动构建 · ${{ github.sha }}
 
-            **AICam —— Varlens 风格全屏取景相机**
+            **AICam —— AI 拍摄教练 · Varlens 风格全屏取景相机**
 
             - 超大取景区（>95%），控件可折叠 / 无操作自动淡出
+            - AI 拍摄教练：MediaPipe 端侧人脸/物体检测 → 构图评分、方向引导
+              （相机左移/右移/抬高/压低）、焦距建议（含 35mm 等效焦距）、用光提示
+            - 主体金框实时跟踪，构图到位快门亮金圈，小白也能出片
             - 点触对焦 + 白环动画、捏合 / 0.6–5x 胶囊平滑变焦
             - 定时快门、构图线、闪光/手电、前置镜像
-            - OpenGL 预览管线重写：帧驱动渲染，修复黑屏
+            - OpenGL 预览管线：帧驱动渲染 + TransformationInfo 转正
 
             | 文件 | 说明 |
             |---|---|

@@ -1,21 +1,16 @@
 package com.dokacam.camera.ai
 
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.RectF
 import com.dokacam.camera.data.model.GuideDirection
-import com.google.mlkit.vision.common.InputImage
-import com.google.mlkit.vision.face.FaceDetection
-import com.google.mlkit.vision.face.FaceDetectorOptions
-import com.google.mlkit.vision.objects.ObjectDetection
-import com.google.mlkit.vision.objects.defaults.ObjectDetectorOptions
-import kotlinx.coroutines.suspendCancellableCoroutine
+import com.google.mediapipe.framework.image.BitmapImageBuilder
+import com.google.mediapipe.framework.image.MPImage
+import com.google.mediapipe.tasks.core.BaseOptions
+import com.google.mediapipe.tasks.vision.facelandmarker.FaceLandmarker
+import com.google.mediapipe.tasks.vision.objectdetector.ObjectDetector
 import kotlin.math.abs
-import kotlin.math.atan2
-import kotlin.math.max
-import kotlin.math.min
 import kotlin.math.sqrt
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
 
 /**
  * 构图分析结果（归一化坐标 0..1）
@@ -26,103 +21,174 @@ data class CompositionResult(
     val faces: List<RectF>,            // 人脸（用于优先引导）
     val directions: List<GuideDirection>,
     val advice: String,                // 一句话建议
-    val sceneKey: String,              // 场景标签（供滤镜推荐）
+    val sceneKey: String,              // 场景标签（供教练卡展示）
     val isPortrait: Boolean,
 )
 
+/** 物体检测结果：归一化框 + COCO 类别名 */
+data class ObjectHit(val box: RectF, val label: String, val score: Float)
+
 /**
- * AI 构图引导 —— Doka 的核心卖点。
+ * AI 构图分析 —— MediaPipe 端侧引擎（全离线、TFLite）。
  *
- * 算法（全部端侧、离线）：
- *  1. ML Kit 检测主体（物体 + 人脸）
- *  2. 取最大主体计算构图评分：
- *     - 三分法：主体中心离最近三分交点的距离
- *     - 视线空间：人脸朝向侧预留空间
- *     - 大小适中：主体占比 25%~60% 最佳
- *  3. 生成方向性引导（左移/右移/靠近/后退/端平）
- *  4. 简单场景分类（人像/食物/风景/夜景…）给滤镜推荐用
+ * 检测：
+ *  1. Face Landmarker（blazeface + 478 关键点）—— 由关键点反推人脸框
+ *  2. Object Detector（EfficientDet-Lite0，COCO 80 类）—— 人物/物体主体框
+ *
+ * 构图评分：
+ *  - 三分法：主体中心离最近三分交点的距离
+ *  - 视线空间：人脸位置留白
+ *  - 大小适中：主体占比 25%~60% 最佳
+ *
+ * 输出方向性引导（左移/右移/靠近/后退）供 UI 叠加提示。
+ * 引擎初始化失败时静默降级为「无主体」，绝不阻塞取景。
  */
-class CompositionAnalyzer {
+class CompositionAnalyzer(context: Context) {
 
-    private val objectDetector by lazy {
-        ObjectDetection.getClient(
-            ObjectDetectorOptions.Builder()
-                .setDetectorMode(ObjectDetectorOptions.SINGLE_IMAGE_MODE)
-                .enableMultipleObjects()
-                .build(),
-        )
+    private val appContext = context.applicationContext
+    private val engineLock = Any()
+
+    /** 模型位于 assets/；初始化失败返回 null 并永久降级，不逐帧重试 */
+    @Volatile private var faceEngine: FaceLandmarker? = null
+    @Volatile private var objectEngine: ObjectDetector? = null
+
+    private fun faceEngineOrNull(): FaceLandmarker? {
+        faceEngine?.let { return it }
+        synchronized(engineLock) {
+            faceEngine?.let { return it }
+            return try {
+                FaceLandmarker.createFromOptions(
+                    appContext,
+                    FaceLandmarker.FaceLandmarkerOptions.builder()
+                        .setBaseOptions(
+                            BaseOptions.builder().setModelAssetPath("face_landmarker.task").build()
+                        )
+                        .setNumFaces(3)
+                        .setMinFaceDetectionConfidence(0.3f)
+                        .setMinFacePresenceConfidence(0.3f)
+                        .build(),
+                )
+            } catch (t: Throwable) {
+                android.util.Log.w(TAG, "FaceLandmarker init failed: ${t.message}")
+                null
+            }.also { faceEngine = it }
+        }
     }
 
-    private val faceDetector by lazy {
-        FaceDetection.getClient(
-            FaceDetectorOptions.Builder()
-                .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST)
-                .setLandmarkMode(FaceDetectorOptions.LANDMARK_MODE_NONE)
-                .setClassificationMode(FaceDetectorOptions.CLASSIFICATION_MODE_NONE)
-                .setMinFaceSize(0.12f)
-                .build(),
-        )
+    private fun objectEngineOrNull(): ObjectDetector? {
+        objectEngine?.let { return it }
+        synchronized(engineLock) {
+            objectEngine?.let { return it }
+            return try {
+                ObjectDetector.createFromOptions(
+                    appContext,
+                    ObjectDetector.ObjectDetectorOptions.builder()
+                        .setBaseOptions(
+                            BaseOptions.builder().setModelAssetPath("efficientdet_lite0.tflite").build()
+                        )
+                        .setScoreThreshold(0.35f)
+                        .setMaxResults(4)
+                        .build(),
+                )
+            } catch (t: Throwable) {
+                android.util.Log.w(TAG, "ObjectDetector init failed: ${t.message}")
+                null
+            }.also { objectEngine = it }
+        }
     }
 
-    /**
-     * 分析一帧。bitmap 会被缩放到长边 640（AI 不需要全分辨率）。
-     */
-    suspend fun analyze(frame: Bitmap): CompositionResult {
-        val small = downscale(frame, 640)
+    fun close() {
+        runCatching { faceEngine?.close() }
+        runCatching { objectEngine?.close() }
+    }
 
-        val objects = detectObjects(small)
-        val faces = detectFaces(small)
+    /** 分析一帧（输入已由 AnalysisUtils 旋转到显示方向、缩到 ≤480px）。 */
+    fun analyze(frame: Bitmap): CompositionResult {
+        val faces = detectFaces(frame)
+        val objects = detectObjects(frame)
+        val objectBoxes = objects.map { it.box }
+        val labels = objects.map { it.label }
 
-        // ML Kit 返回的坐标基于 small，归一化
-        val objBoxes = objects.map { normalize(it, small.width, small.height) }
-        val faceBoxes = faces.map { normalize(it, small.width, small.height) }
-
-        if (small !== frame) small.recycle()
-
-        val subjects = (faceBoxes + objBoxes)
+        val subjects = (faces + objectBoxes)
         val primary = subjects.maxByOrNull { it.width() * it.height() }
 
         return if (primary == null) {
             CompositionResult(
-                score = 60, subjects = emptyList(), faces = faceBoxes,
+                score = 60, subjects = emptyList(), faces = faces,
                 directions = emptyList(),
                 advice = "未检测到明显主体，试试靠近一点",
-                sceneKey = classifyScene(null, objBoxes, faceBoxes),
-                isPortrait = faceBoxes.isNotEmpty(),
+                sceneKey = classifyScene(null, labels, faces),
+                isPortrait = faces.isNotEmpty(),
             )
         } else {
-            val (score, dirs) = evaluateComposition(primary, faceBoxes)
+            val (score, dirs) = evaluateComposition(primary, faces)
             CompositionResult(
                 score = score,
                 subjects = subjects,
-                faces = faceBoxes,
+                faces = faces,
                 directions = dirs,
                 advice = adviceFor(dirs, score),
-                sceneKey = classifyScene(primary, objBoxes, faceBoxes),
-                isPortrait = faceBoxes.isNotEmpty(),
+                sceneKey = classifyScene(primary, labels, faces),
+                isPortrait = faces.isNotEmpty(),
             )
         }
     }
 
     // ------------------------------------------------------------------
 
-    private suspend fun detectObjects(bmp: Bitmap): List<RectF> =
-        suspendCancellableCoroutine { cont ->
-            objectDetector.process(InputImage.fromBitmap(bmp, 0))
-                .addOnSuccessListener { list -> cont.resume(list.map { android.graphics.RectF(it.boundingBox) }) }
-                .addOnFailureListener { cont.resume(emptyList()) } // 失败降级，不阻塞取景
+    /** 人脸框：由 478 关键点 min/max 外扩得到（归一化坐标） */
+    private fun detectFaces(frame: Bitmap): List<RectF> {
+        val engine = faceEngineOrNull() ?: return emptyList()
+        return try {
+            val image: MPImage = BitmapImageBuilder(frame).build()
+            engine.detect(image).faceLandmarks().mapNotNull { pts ->
+                if (pts.isEmpty()) return@mapNotNull null
+                var l = 1f; var t = 1f; var r = 0f; var b = 0f
+                for (p in pts) {
+                    if (p.x() < l) l = p.x()
+                    if (p.x() > r) r = p.x()
+                    if (p.y() < t) t = p.y()
+                    if (p.y() > b) b = p.y()
+                }
+                // 关键点只覆盖五官，外扩成完整头框
+                val padX = (r - l) * 0.18f
+                val padY = (b - t) * 0.25f
+                RectF(
+                    (l - padX).coerceAtLeast(0f), (t - padY).coerceAtLeast(0f),
+                    (r + padX).coerceAtMost(1f), (b + padY).coerceAtMost(1f),
+                )
+            }
+        } catch (t: Throwable) {
+            android.util.Log.w(TAG, "face detect: ${t.message}")
+            emptyList()
         }
+    }
 
-    private suspend fun detectFaces(bmp: Bitmap): List<RectF> =
-        suspendCancellableCoroutine { cont ->
-            faceDetector.process(InputImage.fromBitmap(bmp, 0))
-                .addOnSuccessListener { list -> cont.resume(list.map { android.graphics.RectF(it.boundingBox) }) }
-                .addOnFailureListener { cont.resume(emptyList()) }
+    /** 物体框：EfficientDet 像素坐标 → 归一化 */
+    private fun detectObjects(frame: Bitmap): List<ObjectHit> {
+        val engine = objectEngineOrNull() ?: return emptyList()
+        return try {
+            val image: MPImage = BitmapImageBuilder(frame).build()
+            val w = frame.width.toFloat()
+            val h = frame.height.toFloat()
+            engine.detect(image).detections().mapNotNull { d ->
+                val box = d.boundingBox() ?: return@mapNotNull null
+                val cat = d.categories().firstOrNull() ?: return@mapNotNull null
+                if (box.width() <= 0f || box.height() <= 0f) return@mapNotNull null
+                ObjectHit(
+                    box = RectF(box.left / w, box.top / h, box.right / w, box.bottom / h),
+                    label = cat.categoryName()?.lowercase().orEmpty(),
+                    score = cat.score(),
+                )
+            }.filter { it.box.width() * it.box.height() < 0.98f } // 满框误检丢弃
+        } catch (t: Throwable) {
+            android.util.Log.w(TAG, "object detect: ${t.message}")
+            emptyList()
         }
+    }
 
     /**
-     * 构图评分。
-     * 返回 (分数, 引导方向列表)
+     * 构图评分。返回 (分数, 引导方向列表)
      */
     private fun evaluateComposition(
         subject: RectF,
@@ -176,7 +242,6 @@ class CompositionAnalyzer {
             val fcx = f.centerX()
             gazeScore = when {
                 fcx > 0.30f && fcx < 0.70f -> 80f
-                fcx <= 0.30f -> 65f
                 else -> 65f
             }
         }
@@ -188,11 +253,11 @@ class CompositionAnalyzer {
                 gazeScore * 0.15f
             ).toInt().coerceIn(0, 100)
 
-        // ---- 引导方向 ----
+        // ---- 引导方向（相机运动语义：dx>0=主体在线右 → 右摇把主体拉回线左）----
         if (abs(dx) > 0.10f) dirs +=
-            if (dx > 0) GuideDirection.MOVE_LEFT else GuideDirection.MOVE_RIGHT
+            if (dx > 0) GuideDirection.MOVE_RIGHT else GuideDirection.MOVE_LEFT
         if (abs(dy) > 0.12f) dirs +=
-            if (dy > 0) GuideDirection.MOVE_UP else GuideDirection.MOVE_DOWN
+            if (dy > 0) GuideDirection.MOVE_DOWN else GuideDirection.MOVE_UP
         if (area < 0.08f) dirs += GuideDirection.ZOOM_IN
         if (area > 0.80f) dirs += GuideDirection.ZOOM_OUT
         if (dirs.isEmpty() && score >= 80) dirs += GuideDirection.HOLD_STEADY
@@ -200,22 +265,14 @@ class CompositionAnalyzer {
         return score to dirs
     }
 
-    /** 场景分类（简单启发式，够用且完全离线） */
-    private fun classifyScene(
-        primary: RectF?,
-        objects: List<RectF>,
-        faces: List<RectF>,
-    ): String = when {
-        faces.isNotEmpty() && (primary == null || faces.any { it == primary }) -> "portrait"
+    /** 场景分类：COCO 标签优先，几何启发式兜底 */
+    private fun classifyScene(primary: RectF?, labels: List<String>, faces: List<RectF>): String = when {
+        faces.isNotEmpty() -> "portrait"
         primary == null -> "general"
-        else -> {
-            val area = primary.width() * primary.height()
-            when {
-                area > 0.55f -> "landscape"
-                area in 0.18f..0.50f && primary.centerY() > 0.55f -> "food"
-                else -> "general"
-            }
-        }
+        labels.any { it in ANIMALS } -> "pet"
+        labels.any { it in FOOD } -> "food"
+        primary.width() * primary.height() > 0.55f -> "landscape"
+        else -> "general"
     }
 
     private fun adviceFor(dirs: List<GuideDirection>, score: Int): String = when {
@@ -229,16 +286,17 @@ class CompositionAnalyzer {
         else -> "微调取景即可"
     }
 
-    private fun normalize(r: RectF, w: Int, h: Int) = RectF(
-        r.left / w, r.top / h, r.right / w, r.bottom / h,
-    )
+    companion object {
+        private const val TAG = "CompositionAnalyzer"
 
-    private fun downscale(src: Bitmap, maxDim: Int): Bitmap {
-        val m = max(src.width, src.height)
-        if (m <= maxDim) return src
-        val s = maxDim.toFloat() / m
-        return Bitmap.createScaledBitmap(
-            src, (src.width * s).toInt(), (src.height * s).toInt(), true,
+        /** COCO 80 类中的食物/动物子集，用于场景识别 */
+        private val FOOD = setOf(
+            "banana", "apple", "sandwich", "orange", "broccoli", "carrot",
+            "hot dog", "pizza", "donut", "cake", "bowl",
+        )
+        private val ANIMALS = setOf(
+            "bird", "cat", "dog", "horse", "sheep", "cow",
+            "elephant", "bear", "zebra", "giraffe",
         )
     }
 }

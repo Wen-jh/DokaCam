@@ -1,7 +1,6 @@
-# ML Kit 模型
--keep class com.google.mlkit.** { *; }
--keep class com.google.android.gms.internal.mlkit_** { *; }
--dontwarn com.google.mlkit.**
+# MediaPipe Tasks Vision（JNI 回调 + AutoValue 反射）
+-keep class com.google.mediapipe.** { *; }
+-dontwarn com.google.mediapipe.**
 
 # CameraX
 -keep class androidx.camera.** { *; }

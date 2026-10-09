@@ -1,4 +1,4 @@
-# DokaCam —— Doka 风格开源相机
+# AICam —— Doka 风格开源相机
 
 > 简约纯粹的 AI 相机：实时胶片/CCD 滤镜 · AI 构图引导 · AI 滤镜推荐 · 人像美颜
 >

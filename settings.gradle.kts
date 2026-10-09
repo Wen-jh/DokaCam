@@ -21,5 +21,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "DokaCam"
+rootProject.name = "AICam"
 include(":app")
