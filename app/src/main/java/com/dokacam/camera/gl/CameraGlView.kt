@@ -51,6 +51,56 @@ class CameraGlView(context: Context) : GLSurfaceView(context) {
         if (st != null) attachSurface(st, request) else pendingRequest = request
     }
 
+    /**
+     * 分析帧归一化坐标 (u,v)（已转正的整幅画面）→ 取景视图归一化坐标。
+     * 与 onDrawFrame 同源几何：逆旋转 → cropRect → FILL_CENTER → 前摄镜像。
+     * 分析帧不做 cropRect 裁剪，画面外主体会被收拢到视图边缘。
+     */
+    fun mapAnalysisPointToView(u: Float, v: Float): Pair<Float, Float> {
+        val bw = if (bufferWidth > 0) bufferWidth else 640
+        val bh = if (bufferHeight > 0) bufferHeight else 480
+        val rot = rotationDegrees
+        val crop = cropRect
+        val cw = if (crop != null && crop.width() > 0) crop.width() else bw
+        val ch = if (crop != null && crop.height() > 0) crop.height() else bh
+
+        // 转正帧像素坐标（旋转时宽高互换）
+        val uprightW: Int
+        val uprightH: Int
+        if (rot == 90 || rot == 270) { uprightW = bh; uprightH = bw } else { uprightW = bw; uprightH = bh }
+        val ux = u * uprightW
+        val uy = v * uprightH
+
+        // 逆旋转回缓冲归一化坐标
+        val nx: Float
+        val ny: Float
+        when (rot) {
+            90  -> { nx = uy / bw; ny = (bh - 1 - ux) / bh }
+            270 -> { nx = (bw - 1 - ux) / bw; ny = uy / bh }
+            180 -> { nx = (bw - 1 - ux) / bw; ny = (bh - 1 - uy) / bh }
+            else -> { nx = ux / bw; ny = uy / bh }
+        }
+
+        // 裁剪区归一化（qx,qy ∈ 0..1 表示在 cropRect 内的位置）
+        val cL = (crop?.left ?: 0) / bw.toFloat()
+        val cT = (crop?.top ?: 0) / bh.toFloat()
+        val qx = ((nx - cL) * bw / cw).coerceIn(0f, 1f)
+        val qy = ((ny - cT) * bh / ch).coerceIn(0f, 1f)
+
+        // FILL_CENTER：内容居中铺满视图，超出部分被裁掉
+        val contentAspect = if (rot == 90 || rot == 270) ch.toFloat() / cw else cw.toFloat() / ch
+        val viewAspect = if (width > 0 && height > 0) width.toFloat() / height else 9f / 16f
+        val ratio = if (viewAspect > 0f) contentAspect / viewAspect else 1f
+        val sx = if (ratio >= 1f) ratio else 1f
+        val sy = if (ratio >= 1f) 1f else 1f / ratio
+        var vx = (qx - 0.5f) * sx + 0.5f
+        val vy = (qy - 0.5f) * sy + 0.5f
+
+        // 前摄显示镜像（GL 中 S 矩阵 sx 取负，显示空间水平翻转）
+        if (frontFacing) vx = 1f - vx
+        return Pair(vx.coerceIn(0f, 1f), vy.coerceIn(0f, 1f))
+    }
+
     private fun attachSurface(st: SurfaceTexture, request: SurfaceRequest) {
         val resolution = request.resolution
         bufferWidth = resolution.width
@@ -126,6 +176,7 @@ class CameraGlView(context: Context) : GLSurfaceView(context) {
 
         override fun onSurfaceCreated(gl: GL10?, config: javax.microedition.khronos.egl.EGLConfig?) {
             // EGL 上下文（重）建：换新 SurfaceTexture，并让相机重新协商一路新 SurfaceRequest
+            val stInvalidated = surfaceTexture != null
             surfaceTexture?.release()
             surfaceTexture = null
 
@@ -156,8 +207,10 @@ class CameraGlView(context: Context) : GLSurfaceView(context) {
             val st = SurfaceTexture(textureId)
             st.setOnFrameAvailableListener({ requestRender() }, Handler(Looper.getMainLooper()))
             post { onTextureReady(st) }
-            // 旧 Surface 已随旧 ST 作废：让 CameraX 重新发起 SurfaceRequest 绑到新 ST
-            post { controller?.rebindForNewSurface() }
+            if (stInvalidated) {
+                // 仅当旧 ST 真被作废才重绑（首次建面时 bind#1 的 SurfaceRequest 已握手到新 ST）
+                post { controller?.rebindForNewSurface() }
+            }
         }
 
         override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {

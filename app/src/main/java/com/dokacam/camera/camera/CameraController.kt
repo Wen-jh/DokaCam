@@ -27,7 +27,7 @@ class CameraController(private val context: Context) {
 
     /** AI 分析帧回调（已旋转到显示方向、缩到 480px）。null = 不绑定 ImageAnalysis。
      *  开关 AI 直接在回调里丢帧即可，无需重绑相机。 */
-    var onAnalysisFrame: ((Bitmap) -> Unit)? = null
+    @Volatile var onAnalysisFrame: ((Bitmap) -> Unit)? = null
 
     @Volatile var frontFacing = false
         private set

@@ -77,8 +77,14 @@ class ShotCoach(context: Context, private val scope: CoroutineScope) {
 
     /** 提交一帧（由 ImageAnalysis 回调）。旧帧直接丢弃回收。 */
     fun submit(frame: Bitmap) {
-        if (closed) { frame.recycle(); return } // 关闭竞态窗口里送达的帧直接回收
-        latestFrame.getAndSet(frame)?.recycle()
+        val prev = latestFrame.getAndSet(frame) // 线性化点：此后本帧归 submit 或 close 独占
+        if (closed) {
+            // close() 与本次提交竞态：补偿回收，确保每帧恰好回收一次
+            latestFrame.getAndSet(null)?.recycle()
+            prev?.recycle()
+            return
+        }
+        prev?.recycle()
         signal.trySend(Unit)
     }
 

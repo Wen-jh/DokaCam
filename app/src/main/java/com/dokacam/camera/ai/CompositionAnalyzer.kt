@@ -51,10 +51,14 @@ class CompositionAnalyzer(context: Context) {
     /** 模型位于 assets/；初始化失败返回 null 并永久降级，不逐帧重试 */
     @Volatile private var faceEngine: FaceLandmarker? = null
     @Volatile private var objectEngine: ObjectDetector? = null
+    @Volatile private var faceEngineFailed = false
+    @Volatile private var objectEngineFailed = false
 
     private fun faceEngineOrNull(): FaceLandmarker? {
+        if (faceEngineFailed) return null
         faceEngine?.let { return it }
         synchronized(engineLock) {
+            if (faceEngineFailed) return null
             faceEngine?.let { return it }
             return try {
                 FaceLandmarker.createFromOptions(
@@ -70,14 +74,17 @@ class CompositionAnalyzer(context: Context) {
                 )
             } catch (t: Throwable) {
                 android.util.Log.w(TAG, "FaceLandmarker init failed: ${t.message}")
+                faceEngineFailed = true
                 null
             }.also { faceEngine = it }
         }
     }
 
     private fun objectEngineOrNull(): ObjectDetector? {
+        if (objectEngineFailed) return null
         objectEngine?.let { return it }
         synchronized(engineLock) {
+            if (objectEngineFailed) return null
             objectEngine?.let { return it }
             return try {
                 ObjectDetector.createFromOptions(
@@ -92,6 +99,7 @@ class CompositionAnalyzer(context: Context) {
                 )
             } catch (t: Throwable) {
                 android.util.Log.w(TAG, "ObjectDetector init failed: ${t.message}")
+                objectEngineFailed = true
                 null
             }.also { objectEngine = it }
         }

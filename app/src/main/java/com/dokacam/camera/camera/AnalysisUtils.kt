@@ -15,8 +15,7 @@ import java.io.ByteArrayOutputStream
  * YUV → Bitmap 转换 + AI 分析用例配置。
  *
  * CameraX 的 ImageAnalysis 输出 YUV_420_888，
- * ML Kit 的 InputImage.fromMediaImage 可直接吃，
- * 但我们还需要低分辨率 Bitmap 做色彩统计 → 统一在这里转。
+ * 需转成低分辨率 Bitmap 才能喂给 MediaPipe 的 MPImage / 做色彩统计 → 统一在这里转。
  */
 object AnalysisUtils {
 
@@ -26,7 +25,7 @@ object AnalysisUtils {
     fun imageProxyToBitmap(proxy: ImageProxy, maxDim: Int = 480): Bitmap? = try {
         val rot = proxy.imageInfo.rotationDegrees
 
-        // 先走 ML Kit 兼容路径：NV21 → YuvImage → JPEG → Bitmap
+        // NV21 → YuvImage → JPEG → Bitmap（兼容带 stride 偏移的机型）
         val nv21 = yuv420ToNv21(proxy)
         val yuv = YuvImage(nv21, ImageFormat.NV21, proxy.width, proxy.height, null)
         val out = ByteArrayOutputStream()

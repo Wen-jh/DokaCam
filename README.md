@@ -28,7 +28,7 @@
 ### AI 功能（全端侧、离线）
 | 功能 | 实现 |
 |---|---|
-| AI 构图引导 | ML Kit 物体+人脸检测 → 三分法/主体占比/视线空间评分 → 主体框 + 方向建议 |
+| AI 构图引导 | MediaPipe 人脸+物体检测 → 三分法/主体占比/视线空间评分 → 主体框 + 方向建议 |
 | AI 滤镜推荐 | 场景分类 + 帧亮度/对比/色温/饱和统计 → Top-3 推荐条 |
 | 人像美颜 | GPU 肤色掩码磨皮（保边防塑料脸）+ 肤色提亮，可与任意滤镜叠加 |
 
@@ -53,7 +53,7 @@
 │  CameraViewModel                                                          │
 │   ├─ CameraController (CameraX: Preview→GL / ImageCapture / ImageAnalysis)│
 │   ├─ CaptureProcessor  (离屏EGL → 滤镜 → 水印 → JPEG)                     │
-│   ├─ CompositionAnalyzer (ML Kit 构图评分)                                │
+│   ├─ CompositionAnalyzer (MediaPipe 构图评分)                             │
 │   └─ FilterRecommender (场景+光线 → 滤镜推荐)                              │
 └──────────────┬───────────────────────────────────────────────────────────┘
                │

@@ -285,10 +285,7 @@ fun CameraScreen() {
             SubjectOverlay(
                 subjects = advice.subjects,
                 faces = advice.faces,
-                mirror = controller.frontFacing,
-                frameAspect = 3f / 4f,
-                viewAspect = if (viewSize.height != 0)
-                    viewSize.width.toFloat() / viewSize.height.toFloat() else 3f / 4f,
+                glView = glView,
             )
         }
 
@@ -501,44 +498,26 @@ private fun GridOverlay() {
 
 /**
  * AI 主体框：金框标出人脸/物体，让小白一眼看清「拍的是什么」。
- * 前摄预览镜像，框也要镜像回来才能对上。
- * 预览是 FILL_CENTER 中心裁剪：先把分析帧坐标重映射进可视子矩形再画，
- * 否则在全面屏上框会横向漂移。
+ * 坐标映射直接用 [CameraGlView.mapAnalysisPointToView]——与渲染器同源
+ * （旋转/cropRect/FILL_CENTER/前摄镜像一套几何），框不会因全面屏裁剪而漂移。
  */
 @Composable
 private fun SubjectOverlay(
     subjects: List<RectF>,
     faces: List<RectF>,
-    mirror: Boolean,
-    frameAspect: Float,
-    viewAspect: Float,
+    glView: CameraGlView,
 ) {
     if (subjects.isEmpty() && faces.isEmpty()) return
     Canvas(Modifier.fillMaxSize()) {
         val w = size.width
         val h = size.height
-
-        // 与 CameraGlView 的 FILL_CENTER 一致：把归一化帧坐标映射到屏幕归一化坐标
-        val ca = frameAspect
-        val va = viewAspect
-        var ax = 0f; var sx = 1f; var ay = 0f; var sy = 1f
-        if (ca > va) {
-            val visW = va / ca
-            ax = (1f - visW) / 2f; sx = 1f / visW
-        } else if (va > ca) {
-            val visH = ca / va
-            ay = (1f - visH) / 2f; sy = 1f / visH
-        }
-        fun mapX(x: Float) = ((x - ax) * sx).coerceIn(0f, 1f)
-        fun mapY(y: Float) = ((y - ay) * sy).coerceIn(0f, 1f)
-
         fun box(r: RectF, color: Color, stroke: Float) {
-            val l = if (mirror) (1f - mapX(r.right)) * w else mapX(r.left) * w
-            val rt = if (mirror) (1f - mapX(r.left)) * w else mapX(r.right) * w
+            val (lx, ty) = glView.mapAnalysisPointToView(r.left, r.top)
+            val (rx, by) = glView.mapAnalysisPointToView(r.right, r.bottom)
             drawRoundRect(
                 color = color,
-                topLeft = Offset(l, mapY(r.top) * h),
-                size = Size(rt - l, (mapY(r.bottom) - mapY(r.top)) * h),
+                topLeft = Offset(lx * w, ty * h),
+                size = Size(rx * w - lx * w, by * h - ty * h),
                 cornerRadius = CornerRadius(5.dp.toPx()),
                 style = Stroke(width = stroke),
             )
