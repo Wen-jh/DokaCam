@@ -11,11 +11,11 @@ kotlin {
 }
 
 android {
-    namespace = "com.dokacam.camera"
+    namespace = "com.aicam.camera"
     compileSdk = libs.versions.compileSdk.get().toInt()
 
     defaultConfig {
-        applicationId = "com.dokacam.camera"
+        applicationId = "com.aicam.camera"
         minSdk = libs.versions.minSdk.get().toInt()
         targetSdk = libs.versions.targetSdk.get().toInt()
         versionCode = 1

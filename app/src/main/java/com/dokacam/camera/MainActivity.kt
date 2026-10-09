@@ -30,10 +30,7 @@ private fun DokaNavHost() {
     val nav = rememberNavController()
     NavHost(navController = nav, startDestination = "camera") {
         composable("camera") {
-            CameraScreen(
-                onOpenGallery = { nav.navigate("gallery") },
-                onOpenSettings = { nav.navigate("settings") },
-            )
+            CameraScreen()
         }
         composable("gallery") {
             GalleryScreen(onBack = { nav.popBackStack() })

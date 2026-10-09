@@ -2,152 +2,202 @@ package com.dokacam.camera.gl
 
 import android.content.Context
 import android.graphics.SurfaceTexture
-import android.opengl.EGL14
-import android.opengl.GLES30
+import android.opengl.GLES11Ext
+import android.opengl.GLES20
 import android.opengl.GLSurfaceView
-import android.util.Log
+import android.opengl.Matrix
+import android.os.Handler
+import android.os.Looper
 import android.view.Surface
 import androidx.camera.core.SurfaceRequest
-import java.util.concurrent.Executor
-import javax.microedition.khronos.egl.EGLConfig
+import androidx.core.content.ContextCompat
+import com.dokacam.camera.camera.CameraController
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.nio.FloatBuffer
 import javax.microedition.khronos.opengles.GL10
 
-/**
- * 相机预览视图：GLSurfaceView + 实时滤镜渲染。
- *
- * 数据流：CameraX Preview → SurfaceRequest → SurfaceTexture(OES) → 滤镜着色器 → 屏幕。
- * 「所见即所得」的关键 —— 预览跑的滤镜管线与拍照保存的完全同一套代码。
- *
- * @param frameListener 每帧回调（GL 线程），用于 AI 构图分析等
- */
-class CameraGlView(
-    context: Context,
-    private val frameListener: (() -> Unit)? = null,
-) : GLSurfaceView(context) {
+class CameraGlView(context: Context) : GLSurfaceView(context) {
 
-    companion object { private const val TAG = "CameraGlView" }
+    var controller: CameraController? = null
 
-    private var renderer: Renderer? = null
+    @Volatile private var surfaceTexture: SurfaceTexture? = null
+    @Volatile private var pendingRequest: SurfaceRequest? = null
+
+    @Volatile var bufferWidth = 0
+        private set
+    @Volatile var bufferHeight = 0
+        private set
+    @Volatile var frontFacing = false
 
     init {
-        setEGLContextClientVersion(3)
         preserveEGLContextOnPause = true
-        renderer = Renderer().also { setRenderer(it) }
-        renderMode = RENDERMODE_CONTINUOUSLY
+        setEGLContextClientVersion(2)
+        renderMode = RENDERMODE_WHEN_DIRTY
+        setRenderer(PreviewRenderer())
     }
 
-    /** 滤镜配置热切换（内部已做线程切换，任意线程可调） */
-    fun setRenderConfig(config: RenderConfig) {
-        queueEvent { renderer?.config = config }
+    fun supplySurfaceRequest(request: SurfaceRequest) {
+        val st = surfaceTexture
+        if (st != null) attachSurface(st, request) else pendingRequest = request
     }
 
-    /** 当前 EGL context（须在 GL 线程拿，拍照离屏渲染用来共享 program） */
-    fun getEglContext(onReady: (android.opengl.EGLContext?) -> Unit) {
-        queueEvent { onReady(renderer?.eglContext) }
+    private fun attachSurface(st: SurfaceTexture, request: SurfaceRequest) {
+        val resolution = request.resolution
+        bufferWidth = resolution.width
+        bufferHeight = resolution.height
+        st.setDefaultBufferSize(resolution.width, resolution.height)
+        val surface = Surface(st)
+        request.provideSurface(surface, ContextCompat.getMainExecutor(context)) { surface.release() }
     }
 
-    /**
-     * 直接作为 CameraX Preview 的 SurfaceProvider。
-     * CameraX 调用 setSurfaceProvider { request -> ... } 时回调到本方法。
-     */
-    fun handleSurfaceRequest(request: SurfaceRequest, executor: Executor) {
-        queueEvent {
-            val r = renderer
-            val surface = r?.surface
-            if (r == null || surface == null) {
-                Log.w(TAG, "renderer/surface not ready, rejecting")
-                request.willNotProvideSurface()
-                return@queueEvent
-            }
-            request.provideSurface(surface, executor) { }
+    private fun onTextureReady(st: SurfaceTexture) {
+        surfaceTexture = st
+        pendingRequest?.let {
+            attachSurface(st, it)
+            pendingRequest = null
         }
     }
 
-    fun release() {
-        queueEvent { renderer?.releaseGl() }
+    override fun onDetachedFromWindow() {
+        super.onDetachedFromWindow()
+        surfaceTexture?.release()
+        surfaceTexture = null
     }
 
-    inner class Renderer : GLSurfaceView.Renderer {
+    private inner class PreviewRenderer : GLSurfaceView.Renderer {
 
-        @Volatile var config: RenderConfig = RenderConfig()
+        private var program = 0
+        private var aPosition = 0
+        private var aTexCoord = 0
+        private var uMvp = 0
+        private var uStMatrix = 0
+        private var uTexture = 0
+        private var textureId = 0
 
-        var eglContext: android.opengl.EGLContext? = null
-            private set
+        private val stMatrix = FloatArray(16)
+        private val mvpMatrix = FloatArray(16)
+        private var surfaceWidth = 1
+        private var surfaceHeight = 1
 
-        var surface: Surface? = null
-            private set
+        private lateinit var vertexBuffer: FloatBuffer
+        private lateinit var texBuffer: FloatBuffer
 
-        private var program: FilterProgramOes? = null
-        private var oesTexId = 0
-        private var surfaceTexture: SurfaceTexture? = null
-        private var texMatrix = GlUtil.identityM()
-        private var previewWidth = 1920
-        private var previewHeight = 1080
-        private var startMillis = 0L
-
-        override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
-            eglContext = EGL14.eglGetCurrentContext()
-            program = FilterProgramOes()
-            oesTexId = GlUtil.createTextureOes()
-
-            surfaceTexture = SurfaceTexture(oesTexId).apply {
-                setDefaultBufferSize(previewWidth, previewHeight)
-                setOnFrameAvailableListener {
-                    try {
-                        updateTexImage()
-                        it.getTransformMatrix(texMatrix)
-                    } catch (e: Exception) {
-                        Log.w(TAG, "updateTexImage: ${e.message}")
-                    }
-                }
+        private val vertexCode = """
+            attribute vec2 aPosition;
+            attribute vec2 aTexCoord;
+            uniform mat4 uMvp;
+            uniform mat4 uStMatrix;
+            varying vec2 vTexCoord;
+            void main() {
+                gl_Position = uMvp * vec4(aPosition, 0.0, 1.0);
+                vTexCoord = (uStMatrix * vec4(aTexCoord, 0.0, 1.0)).xy;
             }
-            surface = Surface(surfaceTexture)
-            startMillis = System.currentTimeMillis()
+        """.trimIndent()
+
+        private val fragmentCode = """
+            #extension GL_OES_EGL_image_external : require
+            precision mediump float;
+            varying vec2 vTexCoord;
+            uniform samplerExternalOES uTexture;
+            void main() {
+                gl_FragColor = texture2D(uTexture, vTexCoord);
+            }
+        """.trimIndent()
+
+        override fun onSurfaceCreated(gl: GL10?, config: javax.microedition.khronos.egl.EGLConfig?) {
+            surfaceTexture?.release()
+            surfaceTexture = null
+
+            program = buildProgram()
+            aPosition = GLES20.glGetAttribLocation(program, "aPosition")
+            aTexCoord = GLES20.glGetAttribLocation(program, "aTexCoord")
+            uMvp = GLES20.glGetUniformLocation(program, "uMvp")
+            uStMatrix = GLES20.glGetUniformLocation(program, "uStMatrix")
+            uTexture = GLES20.glGetUniformLocation(program, "uTexture")
+
+            vertexBuffer = floatBuffer(floatArrayOf(-1f, -1f, 1f, -1f, -1f, 1f, 1f, 1f))
+            texBuffer = floatBuffer(floatArrayOf(0f, 0f, 1f, 0f, 0f, 1f, 1f, 1f))
+
+            val textures = IntArray(1)
+            GLES20.glGenTextures(1, textures, 0)
+            textureId = textures[0]
+            GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, textureId)
+            GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
+            GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
+            GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
+            GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
+
+            // 黑屏修复1：帧驱动回路（主线程 Looper，避免 GL 线程无 Looper 崩溃）
+            val st = SurfaceTexture(textureId)
+            st.setOnFrameAvailableListener({ requestRender() }, Handler(Looper.getMainLooper()))
+            post { onTextureReady(st) }
         }
 
         override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {
-            GLES30.glViewport(0, 0, width, height)
+            surfaceWidth = width
+            surfaceHeight = height
+            GLES20.glViewport(0, 0, width, height)
         }
 
         override fun onDrawFrame(gl: GL10?) {
-            GLES30.glClearColor(0f, 0f, 0f, 1f)
-            GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
-
+            GLES20.glClearColor(0f, 0f, 0f, 1f)
+            GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
             val st = surfaceTexture ?: return
-            val prog = program ?: return
 
-            frameListener?.invoke()
+            // 黑屏修复2：消费帧 + 正确纹理变换
+            st.updateTexImage()
+            st.getTransformMatrix(stMatrix)
 
-            val cfg = this.config
-            prog.use()
-            prog.bindTexture(oesTexId)
-            prog.setUniform2("uTexelSize", 1f / previewWidth, 1f / previewHeight)
-            prog.setTime((System.currentTimeMillis() - startMillis) / 1000f)
-            prog.setMirror(cfg.mirror)
-            prog.setQuality(full = false) // 预览降级保帧率
-            prog.applyParams(cfg.params, cfg.intensity)
-            prog.drawFullscreen(texMatrix)
+            // 黑屏修复3：FILL_CENTER 真实宽高比现算
+            val bw = if (bufferWidth > 0) bufferWidth else 640
+            val bh = if (bufferHeight > 0) bufferHeight else 480
+            val bufferAspect = bw.toFloat() / bh.toFloat()
+            val viewAspect = surfaceWidth.toFloat() / surfaceHeight.toFloat()
+            val ratio = if (viewAspect > 0f) bufferAspect / viewAspect else 1f
+            var sx = if (ratio >= 1f) ratio else 1f
+            val sy = if (ratio >= 1f) 1f else 1f / ratio
+            if (frontFacing) sx = -sx
+
+            Matrix.setIdentityM(mvpMatrix, 0)
+            Matrix.scaleM(mvpMatrix, 0, sx, sy, 1f)
+
+            GLES20.glUseProgram(program)
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+            GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, textureId)
+            GLES20.glUniform1i(uTexture, 0)
+            GLES20.glUniformMatrix4fv(uMvp, 1, false, mvpMatrix, 0)
+            GLES20.glUniformMatrix4fv(uStMatrix, 1, false, stMatrix, 0)
+
+            GLES20.glEnableVertexAttribArray(aPosition)
+            GLES20.glVertexAttribPointer(aPosition, 2, GLES20.GL_FLOAT, false, 0, vertexBuffer)
+            GLES20.glEnableVertexAttribArray(aTexCoord)
+            GLES20.glVertexAttribPointer(aTexCoord, 2, GLES20.GL_FLOAT, false, 0, texBuffer)
+            GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
+            GLES20.glDisableVertexAttribArray(aPosition)
+            GLES20.glDisableVertexAttribArray(aTexCoord)
         }
 
-        fun releaseGl() {
-            program?.release()
-            program = null
-            if (oesTexId != 0) {
-                GLES30.glDeleteTextures(1, intArrayOf(oesTexId), 0)
-                oesTexId = 0
+        private fun buildProgram(): Int {
+            fun shader(type: Int, src: String): Int {
+                val s = GLES20.glCreateShader(type)
+                GLES20.glShaderSource(s, src)
+                GLES20.glCompileShader(s)
+                return s
             }
-            surface?.release()
-            surface = null
-            surfaceTexture?.release()
-            surfaceTexture = null
+            val vs = shader(GLES20.GL_VERTEX_SHADER, vertexCode)
+            val fs = shader(GLES20.GL_FRAGMENT_SHADER, fragmentCode)
+            val p = GLES20.glCreateProgram()
+            GLES20.glAttachShader(p, vs)
+            GLES20.glAttachShader(p, fs)
+            GLES20.glLinkProgram(p)
+            return p
         }
+
+        private fun floatBuffer(values: FloatArray): FloatBuffer =
+            ByteBuffer.allocateDirect(values.size * 4)
+                .order(ByteOrder.nativeOrder())
+                .asFloatBuffer()
+                .apply { put(values); position(0) }
     }
 }
-
-/** 预览渲染配置（滤镜参数 + 强度 + 镜像） */
-data class RenderConfig(
-    val params: com.dokacam.camera.data.model.FilterParams =
-        com.dokacam.camera.data.model.FilterParams.NEUTRAL,
-    val intensity: Float = 1f,
-    val mirror: Boolean = false,
-)

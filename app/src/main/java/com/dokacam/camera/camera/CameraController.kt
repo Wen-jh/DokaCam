@@ -1,254 +1,141 @@
 package com.dokacam.camera.camera
 
 import android.content.Context
+import android.os.Environment
 import android.util.Log
-import androidx.camera.core.Camera
-import androidx.camera.core.CameraControl
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.FocusMeteringAction
-import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.Preview
-import androidx.camera.core.SurfaceRequest
+import androidx.camera.core.SurfaceOrientedMeteringPointFactory
 import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
 import com.dokacam.camera.gl.CameraGlView
-import kotlinx.coroutines.guava.await
 import java.io.File
-import java.util.concurrent.Executor
-import kotlin.math.roundToInt
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
-/**
- * 可用镜头描述（0.5x / 1x / 2x / 3x…）
- */
-data class LensOption(
-    val zoomRatio: Float,          // 逻辑焦段
-    val physicalId: Int,           // CameraX lensFacing 已隐含，这里存 ordinal
-    val label: String,
-)
-
-/**
- * CameraX 统一控制器。
- *
- * 职责：
- *  - 绑定 Preview（→ GL 自定义管线）+ ImageCapture
- *  - 枚举物理镜头并给出「焦段条」数据
- *  - 变焦 / 点按对焦 / 曝光补偿 / 闪光灯 / 前后切换
- */
 class CameraController(private val context: Context) {
 
     companion object { private const val TAG = "CameraController" }
 
-    private var provider: ProcessCameraProvider? = null
-    private var camera: Camera? = null
-    private var preview: Preview? = null
+    var glView: CameraGlView? = null
+
+    @Volatile var frontFacing = false
+        private set
+    @Volatile private var flashMode = ImageCapture.FLASH_MODE_OFF
+    @Volatile private var torchOn = false
+
+    private var cameraProvider: ProcessCameraProvider? = null
     private var imageCapture: ImageCapture? = null
+    private var camera: androidx.camera.core.Camera? = null
+    private var lifecycleOwner: LifecycleOwner? = null
 
-    private var cameraControl: CameraControl? = null
-
-    var facing: Int = CameraSelector.LENS_FACING_BACK
-        private set
-
-    /** 设备支持的镜头焦段（升序） */
-    var lensOptions: List<LensOption> = listOf(LensOption(1f, 0, "1x"))
-        private set
-
-    /** UI 当前选中的焦段 */
-    var activeZoom: Float = 1f
-        private set
-
-    val zoomRange: ClosedFloatingPointRange<Float> get() {
-        val c = camera?.cameraInfo?.zoomState?.value
-        return if (c != null) c.minZoomRatio..c.maxZoomRatio else 1f..1f
-    }
-
-    // ------------------------------------------------------------------
-
-    suspend fun bind(
-        lifecycleOwner: LifecycleOwner,
-        glView: CameraGlView,
-        executor: Executor,
-        initialFacing: Int = CameraSelector.LENS_FACING_BACK,
-        onAnalysisFrame: ((android.graphics.Bitmap) -> Unit)? = null,
-    ) {
-        val p = ProcessCameraProvider.getInstance(context).await()
-        provider = p
-
-        facing = initialFacing
-        refreshLensOptions()
-
-        preview = Preview.Builder()
-            .setResolutionSelector(
-                androidx.camera.core.resolutionselector.ResolutionSelector.Builder()
-                    .setAspectRatioStrategy(
-                        androidx.camera.core.resolutionselector.AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY,
-                    )
-                    .build(),
-            )
-            .build()
-            .also { pr ->
-                pr.setSurfaceProvider(executor) { request: SurfaceRequest ->
-                    glView.handleSurfaceRequest(request, executor)
-                }
+    fun start(owner: LifecycleOwner) {
+        lifecycleOwner = owner
+        val future = ProcessCameraProvider.getInstance(context)
+        future.addListener({
+            try {
+                cameraProvider = future.get()
+                bind()
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to start camera", e)
             }
-
-        imageCapture = ImageCapture.Builder()
-            .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
-            .setJpegQuality(97)
-            .build()
-
-        val analysis = onAnalysisFrame?.let { cb ->
-            AnalysisUtils.buildAnalyzer(facing) { bmp ->
-                cb(bmp)
-            }
-        }
-
-        rebind(lifecycleOwner, analysis)
-    }
-
-    private fun rebind(
-        lifecycleOwner: LifecycleOwner,
-        analysis: ImageAnalysis? = null,
-    ) {
-        val p = provider ?: return
-        p.unbindAll()
-
-        val selector = CameraSelector.Builder()
-            .requireLensFacing(facing)
-            .build()
-
-        try {
-            val useCases = mutableListOf<androidx.camera.core.UseCase>(preview!!, imageCapture!!)
-            analysis?.let { useCases += it }
-            camera = p.bindToLifecycle(lifecycleOwner, selector, *useCases.toTypedArray())
-            cameraControl = camera?.cameraControl
-            applyZoom(activeZoom)
-            Log.i(TAG, "bound: facing=$facing lenses=${lensOptions.map { it.zoomRatio }}")
-        } catch (e: Exception) {
-            Log.e(TAG, "bind failed", e)
-        }
-    }
-
-    // ------------------------------------------------------------------
-    // 镜头 / 变焦
-
-    private fun refreshLensOptions() {
-        val p = provider ?: return
-        val info = try {
-            p.getCameraInfo(
-                CameraSelector.Builder().requireLensFacing(facing).build(),
-            )
-        } catch (e: Exception) {
-            null
-        }
-
-        // 通过 zoomState 判断镜头能力：
-        //  minZoomRatio < 1  → 有超广角（0.5x）
-        //  maxZoomRatio ≥ 2  → 有长焦或高倍数码变焦
-        val zoom = info?.zoomState?.value
-        val minRatio = zoom?.minZoomRatio ?: 1f
-        val maxRatio = zoom?.maxZoomRatio ?: 1f
-
-        val opts = mutableListOf(LensOption(1f, 0, "1x"))
-        if (minRatio < 0.95f) opts.add(0, LensOption(0.5f, 0, "0.5x"))
-        if (maxRatio >= 1.9f) opts += LensOption(2f, 2, "2x")
-        if (maxRatio >= 2.9f) opts += LensOption(3f, 3, "3x")
-        if (maxRatio >= 4.9f) opts += LensOption(5f, 5, "5x")
-        lensOptions = opts
-    }
-
-    fun applyZoom(ratio: Float) {
-        activeZoom = ratio
-        cameraControl?.setZoomRatio(ratio)
-    }
-
-    /** 捏合变焦（连续值） */
-    fun applyPinchZoom(scaleFromOne: Float) {
-        val range = zoomRange
-        applyZoom((1f * scaleFromOne).coerceIn(range.start, range.endInclusive))
+        }, ContextCompat.getMainExecutor(context))
     }
 
     fun switchCamera() {
-        facing = if (facing == CameraSelector.LENS_FACING_BACK) {
-            CameraSelector.LENS_FACING_FRONT
-        } else {
-            CameraSelector.LENS_FACING_BACK
+        frontFacing = !frontFacing
+        bind()
+    }
+
+    private fun bind() {
+        val provider = cameraProvider ?: return
+        val owner = lifecycleOwner ?: return
+        provider.unbindAll()
+
+        imageCapture = ImageCapture.Builder()
+            .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+            .build()
+            .apply { flashMode = this@CameraController.flashMode }
+
+        // 黑屏修复4：预览经 SurfaceRequest 直供 GL 纹理
+        val preview = Preview.Builder().build().also { p ->
+            p.setSurfaceProvider { request -> glView?.supplySurfaceRequest(request) }
         }
-        activeZoom = 1f
+
+        val selector = if (frontFacing) CameraSelector.DEFAULT_FRONT_CAMERA
+                       else CameraSelector.DEFAULT_BACK_CAMERA
+
+        camera = try {
+            provider.bindToLifecycle(owner, selector, preview, imageCapture)
+        } catch (e: Exception) {
+            Log.e(TAG, "bindToLifecycle failed", e)
+            null
+        }
+        glView?.frontFacing = frontFacing
+        camera?.cameraControl?.enableTorch(torchOn)
     }
-
-    fun rebindAfterSwitch(lifecycleOwner: LifecycleOwner, onAnalysisFrame: ((android.graphics.Bitmap) -> Unit)? = null) {
-        refreshLensOptions()
-        rebind(lifecycleOwner, onAnalysisFrame?.let { AnalysisUtils.buildAnalyzer(facing, it) })
-    }
-
-    // ------------------------------------------------------------------
-    // 对焦 / 曝光
-
-    /** 点按对焦：把屏幕归一化坐标转成 MeteringPoint */
-    fun focusAt(
-        glView: CameraGlView,
-        normX: Float,   // 0..1
-        normY: Float,
-    ) {
-        val factory = androidx.camera.core.SurfaceOrientedMeteringPointFactory(
-            glView.width.toFloat(), glView.height.toFloat(),
-        )
-        val point = factory.createPoint(normX * glView.width, normY * glView.height)
-        cameraControl?.startFocusAndMetering(
-            FocusMeteringAction.Builder(point).build(),
-        )
-    }
-
-    fun setExposureCompensation(value: Int) {
-        val info = camera?.cameraInfo ?: return
-        val range = info.exposureState.exposureCompensationRange
-        val v = value.coerceIn(range.lower, range.upper)
-        cameraControl?.setExposureCompensationIndex(v)
-    }
-
-    // ------------------------------------------------------------------
-    // 闪光灯
 
     fun setFlashMode(mode: Int) {
+        flashMode = mode
         imageCapture?.flashMode = mode
     }
 
     fun setTorch(on: Boolean) {
-        cameraControl?.enableTorch(on)
+        torchOn = on
+        camera?.cameraControl?.enableTorch(on)
     }
 
-    // ------------------------------------------------------------------
-    // 拍照
+    fun setZoomRatio(ratio: Float): Boolean {
+        val control = camera?.cameraControl ?: return false
+        control.setZoomRatio(ratio)
+        return true
+    }
 
-    /**
-     * 抓取原始高分辨率帧（输出到临时文件），随后由 CaptureProcessor 应用滤镜。
-     */
-    fun takeRawShot(
-        executor: Executor,
-        outputFile: File,
-        onSaved: (File) -> Unit,
-        onError: (String) -> Unit,
-    ) {
-        val ic = imageCapture ?: run { onError("camera not bound"); return }
-        val opts = ImageCapture.OutputFileOptions.Builder(outputFile).build()
-        ic.takePicture(
-            opts, executor,
+    fun getZoomRatio(): Float =
+        camera?.cameraInfo?.zoomState?.value?.zoomRatio ?: 1f
+
+    fun getZoomRange(): Pair<Float, Float>? {
+        val zs = camera?.cameraInfo?.zoomState?.value ?: return null
+        return Pair(zs.minZoomRatio, zs.maxZoomRatio)
+    }
+
+    fun focusAt(x: Float, y: Float, viewWidth: Float, viewHeight: Float): Boolean {
+        val cam = camera ?: return false
+        val factory = SurfaceOrientedMeteringPointFactory(viewWidth, viewHeight)
+        val point = factory.createPoint(x, y)
+        val action = FocusMeteringAction.Builder(
+            point, FocusMeteringAction.FLAG_AF, FocusMeteringAction.FLAG_AE
+        ).disableAutoCancel().build()
+        cam.cameraControl.startFocusAndMetering(action)
+        return true
+    }
+
+    fun takePhoto(onSaved: (String) -> Unit, onError: (String) -> Unit) {
+        val capture = imageCapture ?: run { onError("相机未就绪"); return }
+        val dir = File(
+            context.getExternalFilesDir(Environment.DIRECTORY_PICTURES) ?: context.filesDir,
+            "AICam"
+        ).apply { mkdirs() }
+        val stamp = SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US).format(Date())
+        val file = File(dir, "AICam_$stamp.jpg")
+        val options = ImageCapture.OutputFileOptions.Builder(file).build()
+        capture.takePicture(options, ContextCompat.getMainExecutor(context),
             object : ImageCapture.OnImageSavedCallback {
-                override fun onImageSaved(output: ImageCapture.OutputFileResults) {
-                    onSaved(outputFile)
+                override fun onImageSaved(results: ImageCapture.OutputFileResults) {
+                    onSaved(file.absolutePath)
                 }
-
-                override fun onError(ex: ImageCaptureException) {
-                    Log.e(TAG, "takePicture failed", ex)
-                    onError(ex.message ?: "unknown")
+                override fun onError(exception: ImageCaptureException) {
+                    onError(exception.message ?: "拍摄失败")
                 }
-            },
-        )
+            })
     }
 
-    fun unbind() {
-        provider?.unbindAll()
+    fun shutdown() {
+        try { cameraProvider?.unbindAll() } catch (e: Exception) { Log.w(TAG, "unbind", e) }
     }
 }
