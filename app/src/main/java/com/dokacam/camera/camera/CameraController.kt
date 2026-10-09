@@ -109,7 +109,7 @@ class CameraController(private val context: Context) {
         val factory = SurfaceOrientedMeteringPointFactory(viewWidth, viewHeight)
         val point = factory.createPoint(x, y)
         val action = FocusMeteringAction.Builder(
-            point, FocusMeteringAction.FLAG_AF, FocusMeteringAction.FLAG_AE
+            point, FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AE
         ).disableAutoCancel().build()
         cam.cameraControl.startFocusAndMetering(action)
         return true

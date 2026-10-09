@@ -48,14 +48,14 @@ jobs:
       - name: Upload debug APK (artifact)
         uses: actions/upload-artifact@v4
         with:
-          name: DokaCam-debug
+          name: AICam-debug
           path: app/build/outputs/apk/debug/*.apk
           retention-days: 14
 
       - name: Upload release APK (artifact)
         uses: actions/upload-artifact@v4
         with:
-          name: DokaCam-release-unsigned
+          name: AICam-release-unsigned
           path: app/build/outputs/apk/release/*.apk
           retention-days: 14
 
@@ -67,15 +67,16 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: v${{ github.run_number }}
-          name: DokaCam v1.0.${{ github.run_number }}
+          name: AICam v1.0.${{ github.run_number }}
           body: |
             自动构建 · ${{ github.sha }}
 
-            **DokaCam —— Doka 风格开源相机**
+            **AICam —— Varlens 风格全屏取景相机**
 
-            - 26 款胶片/CCD/黑白/创意滤镜（实时预览，所见即所得）
-            - AI 构图引导 + AI 滤镜推荐 + 人像美颜（全端侧离线）
-            - CCD 低清模式、复古日期水印、多焦段、六种网格
+            - 超大取景区（>95%），控件可折叠 / 无操作自动淡出
+            - 点触对焦 + 白环动画、捏合 / 0.6–5x 胶囊平滑变焦
+            - 定时快门、构图线、闪光/手电、前置镜像
+            - OpenGL 预览管线重写：帧驱动渲染，修复黑屏
 
             | 文件 | 说明 |
             |---|---|
