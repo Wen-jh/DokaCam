@@ -48,8 +48,10 @@ class CameraGlView(context: Context) : GLSurfaceView(context) {
     init {
         preserveEGLContextOnPause = true
         setEGLContextClientVersion(2)
-        renderMode = RENDERMODE_WHEN_DIRTY
+        // setRenderer 必须先于 renderMode：GL 线程由 setRenderer 创建，
+        // 顺序颠倒会在构造时 NPE 闪退（5595c03 引入，真机已复现）
         setRenderer(PreviewRenderer())
+        renderMode = RENDERMODE_WHEN_DIRTY
     }
 
     fun supplySurfaceRequest(request: SurfaceRequest) {
