@@ -77,6 +77,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.aicam.camera.BuildConfig
 import com.dokacam.camera.ai.ShotAdvice
 import com.dokacam.camera.ai.ShotCoach
 import com.dokacam.camera.camera.AnalysisUtils
@@ -285,6 +286,39 @@ fun CameraScreen() {
                 faces = advice.faces,
                 glView = glView,
             )
+        }
+
+        // debug HUD：GL 几何状态 + crop 矩阵 A/B 开关（真机诊断预览拉伸/方向）
+        if (BuildConfig.DEBUG) {
+            var hud by remember { mutableStateOf("waiting…") }
+            LaunchedEffect(Unit) {
+                while (true) {
+                    delay(500)
+                    hud = "buf=${glView.bufferWidth}x${glView.bufferHeight} " +
+                        "rot=${glView.rotDeg} hasCT=${glView.hasCameraTransformNow}\n" +
+                        "crop=${glView.cropRectNow?.toShortString() ?: "full"} " +
+                        "comp=${glView.orientationCompCw}\n" +
+                        "view=${glView.width}x${glView.height}"
+                }
+            }
+            Column(
+                Modifier
+                    .align(Alignment.TopStart)
+                    .background(Color.Black.copy(alpha = 0.55f))
+                    .padding(4.dp)
+            ) {
+                Text(hud, color = Color(0xFF7CFC00), fontSize = 9.sp)
+                Text(
+                    if (glView.ignoreCropForDiagnosis) "[crop:OFF 点击恢复]"
+                    else "[crop:ON 点击跳过]",
+                    color = Color.Yellow,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.clickable {
+                        glView.ignoreCropForDiagnosis = !glView.ignoreCropForDiagnosis
+                    },
+                )
+            }
         }
 
         focusPoint?.let { p ->

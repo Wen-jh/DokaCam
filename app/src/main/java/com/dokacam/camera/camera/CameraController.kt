@@ -71,6 +71,13 @@ class CameraController(private val context: Context) {
                     if (rot != captureRotation) {
                         captureRotation = rot
                         imageCapture?.targetRotation = rot // 绑定前后设置均合法
+                        // 预览同步跟手（竖屏锁定：display rotation 恒 0，只能靠物理方向补偿）
+                        glView?.orientationCompCw = when (rot) {
+                            Surface.ROTATION_90 -> 90
+                            Surface.ROTATION_180 -> 180
+                            Surface.ROTATION_270 -> 270
+                            else -> 0
+                        }
                     }
                 }
             }.also { if (it.canDetectOrientation()) it.enable() }

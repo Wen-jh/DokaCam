@@ -45,6 +45,20 @@ class CameraGlView(context: Context) : GLSurfaceView(context) {
      */
     @Volatile private var hasCameraTransform = true
 
+    /** 物理握持方向补偿（顺时针度数 0/90/180/270）。竖屏锁定应用 display rotation 恒 0，
+     *  预览要跟手转：由 CameraController 的 OrientationEventListener 驱动 */
+    @Volatile var orientationCompCw = 0
+        set(value) { field = value; requestRender() }
+
+    /** 诊断开关：跳过 cropRect 裁剪矩阵（排查 ViewPort crop 与 ST 变换的坐标空间配合） */
+    @Volatile var ignoreCropForDiagnosis = false
+        set(value) { field = value; requestRender() }
+
+    // ---- debug HUD 只读快照（BuildConfig.DEBUG 下展示）----
+    val rotDeg: Int get() = rotationDegrees
+    val hasCameraTransformNow: Boolean get() = hasCameraTransform
+    val cropRectNow: Rect? get() = cropRect
+
     init {
         preserveEGLContextOnPause = true
         setEGLContextClientVersion(2)
@@ -68,6 +82,8 @@ class CameraGlView(context: Context) : GLSurfaceView(context) {
         val bw = if (bufferWidth > 0) bufferWidth else 640
         val bh = if (bufferHeight > 0) bufferHeight else 480
         val rot = rotationDegrees
+        // 与 onDrawFrame 同源的显示总旋转（转正 + 物理方向补偿）
+        val rotTotal = (rot + orientationCompCw) % 360
         val crop = cropRect
         val cw = if (crop != null && crop.width() > 0) crop.width() else bw
         val ch = if (crop != null && crop.height() > 0) crop.height() else bh
@@ -98,14 +114,14 @@ class CameraGlView(context: Context) : GLSurfaceView(context) {
         // FILL_CENTER：内容居中铺满视图，超出部分被裁掉。
         // sx/sy 是屏幕空间系数；rot=90/270 时缓冲轴与视图轴已互换，
         // 故 vx 由 qy 驱动、vy 由 qx 驱动，符号随旋转方向翻转。
-        val contentAspect = if (rot == 90 || rot == 270) ch.toFloat() / cw else cw.toFloat() / ch
+        val contentAspect = if (rotTotal == 90 || rotTotal == 270) ch.toFloat() / cw else cw.toFloat() / ch
         val viewAspect = if (width > 0 && height > 0) width.toFloat() / height else 9f / 16f
         val ratio = if (viewAspect > 0f) contentAspect / viewAspect else 1f
         val sx = if (ratio >= 1f) ratio else 1f
         val sy = if (ratio >= 1f) 1f else 1f / ratio
         var vx: Float
         val vy: Float
-        when (rot) {
+        when (rotTotal) {
             90  -> { vx = (0.5f - qy) * sx + 0.5f; vy = (qx - 0.5f) * sy + 0.5f }
             270 -> { vx = (qy - 0.5f) * sx + 0.5f; vy = (0.5f - qx) * sy + 0.5f }
             180 -> { vx = (0.5f - qx) * sx + 0.5f; vy = (0.5f - qy) * sy + 0.5f }
@@ -253,13 +269,15 @@ class CameraGlView(context: Context) : GLSurfaceView(context) {
             val bw = if (bufferWidth > 0) bufferWidth else 640
             val bh = if (bufferHeight > 0) bufferHeight else 480
             val rot = rotationDegrees
+            val comp = orientationCompCw
+            val rotTotal = (rot + comp) % 360
             val crop = cropRect
             val cw = if (crop != null && crop.width() > 0) crop.width() else bw
             val ch = if (crop != null && crop.height() > 0) crop.height() else bh
 
             // C：cropRect（缓冲像素坐标，y 向下）映射到满四边形
             Matrix.setIdentityM(cropMatrix, 0)
-            if (crop != null && (cw != bw || ch != bh)) {
+            if (!ignoreCropForDiagnosis && crop != null && (cw != bw || ch != bh)) {
                 val nx = (crop.left + crop.right).toFloat() / bw - 1f
                 val ny = 1f - (crop.top + crop.bottom).toFloat() / bh
                 Matrix.scaleM(cropMatrix, 0, bw.toFloat() / cw, bh.toFloat() / ch, 1f)
@@ -267,7 +285,7 @@ class CameraGlView(context: Context) : GLSurfaceView(context) {
             }
 
             // FILL_CENTER：按旋转后的宽高比现算（90/270 交换宽高）
-            val contentAspect = if (rot == 90 || rot == 270) ch.toFloat() / cw
+            val contentAspect = if (rotTotal == 90 || rotTotal == 270) ch.toFloat() / cw
                                 else cw.toFloat() / ch
             val viewAspect = surfaceWidth.toFloat() / surfaceHeight.toFloat()
             val ratio = if (viewAspect > 0f) contentAspect / viewAspect else 1f
@@ -280,7 +298,13 @@ class CameraGlView(context: Context) : GLSurfaceView(context) {
             // false：需手动补 -rot（CameraX 顺时针为正，NDC 取负角）
             Matrix.setIdentityM(mvpMatrix, 0)
             Matrix.scaleM(mvpMatrix, 0, sx, sy, 1f)
-            if (!hasCameraTransform && rot != 0) Matrix.rotateM(mvpMatrix, 0, -rot.toFloat(), 0f, 0f, 1f)
+            if (!hasCameraTransform) {
+                // ST 未含相机变换：总旋转 = 转正(rot) + 物理方向补偿(comp)
+                if (rotTotal != 0) Matrix.rotateM(mvpMatrix, 0, -rotTotal.toFloat(), 0f, 0f, 1f)
+            } else if (comp != 0) {
+                // ST 已含 display-rot-0 的转正：只需补物理方向
+                Matrix.rotateM(mvpMatrix, 0, -comp.toFloat(), 0f, 0f, 1f)
+            }
             Matrix.multiplyMM(tmpMatrix, 0, mvpMatrix, 0, cropMatrix, 0)
 
             GLES20.glUseProgram(program)
