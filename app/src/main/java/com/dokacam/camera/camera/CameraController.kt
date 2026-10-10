@@ -102,13 +102,14 @@ class CameraController(private val context: Context) {
         val owner = lifecycleOwner ?: return
         provider.unbindAll()
 
-        imageCapture = ImageCapture.Builder()
+        val capture = ImageCapture.Builder()
             .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
             .build()
             .apply {
                 flashMode = this@CameraController.flashMode
                 targetRotation = captureRotation
             }
+        imageCapture = capture
 
         // 黑屏修复4：预览经 SurfaceRequest 直供 GL 纹理
         val preview = Preview.Builder().build().also { p ->
@@ -139,7 +140,7 @@ class CameraController(private val context: Context) {
         val vh = gl?.height?.takeIf { it > 0 } ?: context.resources.displayMetrics.heightPixels
         val group = UseCaseGroup.Builder()
             .addUseCase(preview)
-            .addUseCase(imageCapture)
+            .addUseCase(capture)
             .apply { analysis?.let { addUseCase(it) } }
             .setViewPort(
                 ViewPort.Builder(Rational(vw, vh), Surface.ROTATION_0)
