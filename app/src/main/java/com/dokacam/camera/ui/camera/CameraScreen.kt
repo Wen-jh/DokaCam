@@ -4,7 +4,7 @@ import android.Manifest
 import android.app.Activity
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
+import android.net.Uri
 import android.graphics.RectF
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -79,10 +79,11 @@ import androidx.core.view.WindowCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.dokacam.camera.ai.ShotAdvice
 import com.dokacam.camera.ai.ShotCoach
+import com.dokacam.camera.camera.AnalysisUtils
 import com.dokacam.camera.camera.CameraController
+import com.dokacam.camera.data.media.MediaRepository
 import com.dokacam.camera.data.model.GuideDirection
 import com.dokacam.camera.gl.CameraGlView
-import java.io.File
 import kotlin.math.abs
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -207,26 +208,23 @@ fun CameraScreen() {
     }
 
     var thumb by remember { mutableStateOf<Bitmap?>(null) }
-    val saveDirPath = remember {
-        File(context.getExternalFilesDir(android.os.Environment.DIRECTORY_PICTURES), "AICam").absolutePath
-    }
-    fun loadThumb(path: String?) {
-        if (path == null) return
-        thumb = BitmapFactory.decodeFile(path, BitmapFactory.Options().apply { inSampleSize = 8 })
+    fun loadThumb(uri: Uri?) {
+        if (uri == null) return
+        // 按 EXIF 转正解码：HAL 原样出横幅像素的机型上裸解码会侧立
+        thumb = AnalysisUtils.decodeOrientedThumbnail(context, uri, 256)
     }
     LaunchedEffect(Unit) {
-        val latest = File(saveDirPath).listFiles()
-            ?.filter { it.extension == "jpg" }
-            ?.maxByOrNull { it.lastModified() }
-        if (latest != null) loadThumb(latest.absolutePath)
+        // 启动时取 MediaStore 里最近一张做缩略图
+        val latest = MediaRepository(context).queryMyPhotos().firstOrNull()
+        loadThumb(latest?.uri)
     }
 
     fun doCapture() {
         flashTick++
         controller.takePhoto(
-            onSaved = { path ->
-                loadThumb(path)
-                Toast.makeText(context, "已保存: AICam/${File(path).name}", Toast.LENGTH_SHORT).show()
+            onSaved = { uri ->
+                loadThumb(uri)
+                Toast.makeText(context, "已保存到相册", Toast.LENGTH_SHORT).show()
             },
             onError = { msg -> Toast.makeText(context, "拍摄失败: $msg", Toast.LENGTH_SHORT).show() }
         )
@@ -381,7 +379,7 @@ fun CameraScreen() {
                             }
                         )
                     }
-                    Text("保存位置: $saveDirPath", color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp)
+                    Text("保存位置: 相册/Pictures/AICam", color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp)
                 }
             }
             Spacer(Modifier.height(8.dp))

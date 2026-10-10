@@ -1,14 +1,17 @@
 package com.dokacam.camera.camera
 
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.ImageFormat
 import android.graphics.Matrix
 import android.graphics.Rect
 import android.graphics.YuvImage
+import android.net.Uri
 import android.util.Log
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
+import androidx.exifinterface.media.ExifInterface
 import java.io.ByteArrayOutputStream
 
 /**
@@ -132,5 +135,38 @@ object AnalysisUtils {
         java.util.concurrent.Executors.newSingleThreadExecutor { r ->
             Thread(r, "doka-ai").apply { priority = Thread.NORM_PRIORITY - 1 }
         }
+    }
+
+    /**
+     * 解码缩略图并按 EXIF 转正（file:// 与 content:// 皆可）。
+     * 裸 BitmapFactory 不读 EXIF，HAL 原样出横幅像素的机型上缩略图会侧立。
+     */
+    fun decodeOrientedThumbnail(context: Context, uri: Uri, maxDim: Int = 256): Bitmap? = try {
+        val cr = context.contentResolver
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        cr.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+        var sample = 1
+        while (maxOf(bounds.outWidth, bounds.outHeight) / sample > maxDim * 2) sample *= 2
+        val opts = BitmapFactory.Options().apply { inSampleSize = sample }
+        val bmp = cr.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, opts) }
+            ?: return null
+        val orientation = cr.openInputStream(uri)?.use { ExifInterface(it) }?.getAttributeInt(
+            ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL,
+        ) ?: ExifInterface.ORIENTATION_NORMAL
+        val deg = when (orientation) {
+            ExifInterface.ORIENTATION_ROTATE_90 -> 90f
+            ExifInterface.ORIENTATION_ROTATE_180 -> 180f
+            ExifInterface.ORIENTATION_ROTATE_270 -> 270f
+            else -> 0f // 自拍 JPEG 只会出现 1/6/8；镜像类条目不做特殊处理
+        }
+        if (deg == 0f) bmp else {
+            val m = Matrix().apply { postRotate(deg) }
+            val rotated = Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, m, true)
+            if (rotated !== bmp) bmp.recycle()
+            rotated
+        }
+    } catch (t: Throwable) {
+        Log.w(TAG, "oriented thumb: ${t.message}")
+        null
     }
 }

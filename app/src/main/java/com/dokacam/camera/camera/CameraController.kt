@@ -1,15 +1,25 @@
 package com.dokacam.camera.camera
 
+import android.content.ContentValues
 import android.content.Context
 import android.graphics.Bitmap
+import android.hardware.SensorManager
+import android.net.Uri
+import android.os.Build
 import android.os.Environment
+import android.provider.MediaStore
 import android.util.Log
+import android.util.Rational
+import android.view.OrientationEventListener
+import android.view.Surface
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.FocusMeteringAction
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.Preview
 import androidx.camera.core.SurfaceOrientedMeteringPointFactory
+import androidx.camera.core.UseCaseGroup
+import androidx.camera.core.ViewPort
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
@@ -40,9 +50,31 @@ class CameraController(private val context: Context) {
     private var lifecycleOwner: LifecycleOwner? = null
     @Volatile private var started = false
 
+    /** 物理握持朝向：竖屏锁定 App 里 display rotation 恒为 0，
+     *  拍照 EXIF 必须跟传感器监听到的真实朝向走，否则横握拍出的照片全侧立 */
+    private var orientationListener: OrientationEventListener? = null
+    @Volatile private var captureRotation = Surface.ROTATION_0
+
     fun start(owner: LifecycleOwner) {
         lifecycleOwner = owner
         started = true
+        if (orientationListener == null) {
+            orientationListener = object : OrientationEventListener(context, SensorManager.SENSOR_DELAY_UI) {
+                override fun onOrientationChanged(orientation: Int) {
+                    if (orientation == ORIENTATION_UNKNOWN) return
+                    val rot = when (orientation) {
+                        in 45..134 -> Surface.ROTATION_270
+                        in 135..224 -> Surface.ROTATION_180
+                        in 225..314 -> Surface.ROTATION_90
+                        else -> Surface.ROTATION_0
+                    }
+                    if (rot != captureRotation) {
+                        captureRotation = rot
+                        imageCapture?.targetRotation = rot // 绑定前后设置均合法
+                    }
+                }
+            }.also { if (it.canDetectOrientation()) it.enable() }
+        }
         val future = ProcessCameraProvider.getInstance(context)
         future.addListener({
             if (!started) return@addListener
@@ -73,7 +105,10 @@ class CameraController(private val context: Context) {
         imageCapture = ImageCapture.Builder()
             .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
             .build()
-            .apply { flashMode = this@CameraController.flashMode }
+            .apply {
+                flashMode = this@CameraController.flashMode
+                targetRotation = captureRotation
+            }
 
         // 黑屏修复4：预览经 SurfaceRequest 直供 GL 纹理
         val preview = Preview.Builder().build().also { p ->
@@ -97,22 +132,36 @@ class CameraController(private val context: Context) {
 
         val useCases = listOfNotNull(preview, imageCapture, analysis)
 
-        camera = try {
-            provider.bindToLifecycle(owner, selector, *useCases.toTypedArray())
+        // WYSIWYG：三个用例共享 ViewPort（取景框宽高比），成片 FOV 与预览一致，
+        // 不再"拍到取景框外的东西"。cropRect 经 TransformationInfo 下发，GL 与 AI 映射均已支持。
+        val gl = glView
+        val vw = gl?.width?.takeIf { it > 0 } ?: context.resources.displayMetrics.widthPixels
+        val vh = gl?.height?.takeIf { it > 0 } ?: context.resources.displayMetrics.heightPixels
+        val group = UseCaseGroup.Builder()
+            .addUseCase(preview)
+            .addUseCase(imageCapture)
+            .apply { analysis?.let { addUseCase(it) } }
+            .setViewPort(
+                ViewPort.Builder(Rational(vw, vh), Surface.ROTATION_0)
+                    .setScaleType(ViewPort.FILL_CENTER)
+                    .build(),
+            )
+            .build()
+
+        fun bindTo(selector: CameraSelector, withViewport: Boolean): androidx.camera.core.Camera? = try {
+            if (withViewport) provider.bindToLifecycle(owner, selector, group)
+            else provider.bindToLifecycle(owner, selector, *useCases.toTypedArray())
         } catch (e: Exception) {
-            Log.e(TAG, "bindToLifecycle failed, trying other lens", e)
-            // 绑定失败时回退另一面，避免 unbindAll 后永久黑屏；并回滚朝向状态
-            val fallback = if (frontFacing) CameraSelector.DEFAULT_BACK_CAMERA
-                           else CameraSelector.DEFAULT_FRONT_CAMERA
-            try {
-                provider.bindToLifecycle(owner, fallback, *useCases.toTypedArray()).also {
-                    frontFacing = !frontFacing
-                }
-            } catch (e2: Exception) {
-                Log.e(TAG, "fallback bind failed", e2)
-                null
-            }
+            Log.w(TAG, "bind($selector, viewport=$withViewport) failed: ${e.message}")
+            null
         }
+
+        val fallback = if (frontFacing) CameraSelector.DEFAULT_BACK_CAMERA
+                       else CameraSelector.DEFAULT_FRONT_CAMERA
+        camera = bindTo(selector, true)
+            ?: bindTo(fallback, true)?.also { frontFacing = !frontFacing }
+            ?: bindTo(fallback, false)?.also { frontFacing = !frontFacing } // 个别机型 ViewPort 异常时的保底
+        if (camera == null) Log.e(TAG, "all bind attempts failed")
         glView?.frontFacing = frontFacing
         camera?.cameraControl?.enableTorch(torchOn)
     }
@@ -152,19 +201,46 @@ class CameraController(private val context: Context) {
         return true
     }
 
-    fun takePhoto(onSaved: (String) -> Unit, onError: (String) -> Unit) {
+    fun takePhoto(onSaved: (Uri) -> Unit, onError: (String) -> Unit) {
         val capture = imageCapture ?: run { onError("相机未就绪"); return }
-        val dir = File(
-            context.getExternalFilesDir(Environment.DIRECTORY_PICTURES) ?: context.filesDir,
-            "AICam"
-        ).apply { mkdirs() }
         val stamp = SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US).format(Date())
-        val file = File(dir, "AICam_$stamp.jpg")
-        val options = ImageCapture.OutputFileOptions.Builder(file).build()
+        val name = "AICam_$stamp.jpg"
+        val options = if (Build.VERSION.SDK_INT >= 29) {
+            // 直接入库 MediaStore（owner=本包，Pictures/AICam）：
+            // 应用内相册查得到、EXIF 方向原样保留、外部分享可见 —— 与系统相机一致
+            val values = ContentValues().apply {
+                put(MediaStore.Images.Media.DISPLAY_NAME, name)
+                put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+                put(MediaStore.Images.Media.RELATIVE_PATH, "${Environment.DIRECTORY_PICTURES}/AICam")
+                put(MediaStore.Images.Media.IS_PENDING, 1)
+            }
+            ImageCapture.OutputFileOptions.Builder(
+                context.contentResolver,
+                MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY),
+                values,
+            ).build()
+        } else {
+            val dir = File(
+                context.getExternalFilesDir(Environment.DIRECTORY_PICTURES) ?: context.filesDir,
+                "AICam",
+            ).apply { mkdirs() }
+            ImageCapture.OutputFileOptions.Builder(File(dir, name)).build()
+        }
         capture.takePicture(options, ContextCompat.getMainExecutor(context),
             object : ImageCapture.OnImageSavedCallback {
                 override fun onImageSaved(results: ImageCapture.OutputFileResults) {
-                    onSaved(file.absolutePath)
+                    val uri = results.savedUri ?: run { onError("保存失败"); return }
+                    if (Build.VERSION.SDK_INT >= 29) {
+                        // CameraX 正常会自行清 IS_PENDING；这里兜底再清一次（幂等）
+                        runCatching {
+                            context.contentResolver.update(
+                                uri,
+                                ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) },
+                                null, null,
+                            )
+                        }
+                    }
+                    onSaved(uri)
                 }
                 override fun onError(exception: ImageCaptureException) {
                     onError(exception.message ?: "拍摄失败")
@@ -174,6 +250,7 @@ class CameraController(private val context: Context) {
 
     fun shutdown() {
         started = false
+        orientationListener?.disable()
         try { cameraProvider?.unbindAll() } catch (e: Exception) { Log.w(TAG, "unbind", e) }
     }
 }

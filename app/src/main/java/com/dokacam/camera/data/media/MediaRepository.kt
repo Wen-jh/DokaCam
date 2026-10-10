@@ -50,8 +50,12 @@ class MediaRepository(private val context: Context) {
                 ),
                 if (android.os.Build.VERSION.SDK_INT >= 29) {
                     "${MediaStore.Images.Media.OWNER_PACKAGE_NAME}=?"
-                } else null,
-                if (android.os.Build.VERSION.SDK_INT >= 29) arrayOf(context.packageName) else null,
+                } else {
+                    // 旧版本无 owner 列：按命名约定过滤，避免把用户整机相册都拉进来
+                    "${MediaStore.Images.Media.DISPLAY_NAME} LIKE ? ESCAPE '\\'"
+                },
+                if (android.os.Build.VERSION.SDK_INT >= 29) arrayOf(context.packageName)
+                else arrayOf("AICam\\_%"),
                 "${MediaStore.Images.Media.DATE_ADDED} DESC",
             )?.use { c ->
                 val iId = c.getColumnIndexOrThrow(MediaStore.Images.Media._ID)

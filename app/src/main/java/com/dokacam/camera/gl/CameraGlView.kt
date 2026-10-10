@@ -37,6 +37,12 @@ class CameraGlView(context: Context) : GLSurfaceView(context) {
     // 传感器→显示 的方向信息（来自 SurfaceRequest.TransformationInfo）
     @Volatile private var rotationDegrees = 0
     @Volatile private var cropRect: Rect? = null
+
+    /**
+     * true：相机已把相机变换（传感器旋转，前摄还有镜像）写进 Surface 的 transform，
+     * ST 矩阵里就带着 —— 消费方只应用 ST，不能再叠 rotationDegrees（否则双重旋转→侧转90°）。
+     * false：ST 只含 y 翻转等基础变换，需消费方手动补 rotate(-rotationDegrees)。
+     */
     @Volatile private var hasCameraTransform = true
 
     init {
@@ -71,12 +77,12 @@ class CameraGlView(context: Context) : GLSurfaceView(context) {
         val ux = u * uprightW
         val uy = v * uprightH
 
-        // 逆旋转回缓冲归一化坐标
+        // 逆旋转回缓冲归一化坐标（undo AnalysisUtils 的 postRotate(+rot)，y 向下位图约定）
         val nx: Float
         val ny: Float
         when (rot) {
             90  -> { nx = uy / bw; ny = (bh - 1 - ux) / bh }
-            270 -> { nx = (bw - 1 - ux) / bw; ny = uy / bh }
+            270 -> { nx = (bw - 1 - uy) / bw; ny = ux / bh }
             180 -> { nx = (bw - 1 - ux) / bw; ny = (bh - 1 - uy) / bh }
             else -> { nx = ux / bw; ny = uy / bh }
         }
@@ -87,14 +93,22 @@ class CameraGlView(context: Context) : GLSurfaceView(context) {
         val qx = ((nx - cL) * bw / cw).coerceIn(0f, 1f)
         val qy = ((ny - cT) * bh / ch).coerceIn(0f, 1f)
 
-        // FILL_CENTER：内容居中铺满视图，超出部分被裁掉
+        // FILL_CENTER：内容居中铺满视图，超出部分被裁掉。
+        // sx/sy 是屏幕空间系数；rot=90/270 时缓冲轴与视图轴已互换，
+        // 故 vx 由 qy 驱动、vy 由 qx 驱动，符号随旋转方向翻转。
         val contentAspect = if (rot == 90 || rot == 270) ch.toFloat() / cw else cw.toFloat() / ch
         val viewAspect = if (width > 0 && height > 0) width.toFloat() / height else 9f / 16f
         val ratio = if (viewAspect > 0f) contentAspect / viewAspect else 1f
         val sx = if (ratio >= 1f) ratio else 1f
         val sy = if (ratio >= 1f) 1f else 1f / ratio
-        var vx = (qx - 0.5f) * sx + 0.5f
-        val vy = (qy - 0.5f) * sy + 0.5f
+        var vx: Float
+        val vy: Float
+        when (rot) {
+            90  -> { vx = (0.5f - qy) * sx + 0.5f; vy = (qx - 0.5f) * sy + 0.5f }
+            270 -> { vx = (qy - 0.5f) * sx + 0.5f; vy = (0.5f - qx) * sy + 0.5f }
+            180 -> { vx = (0.5f - qx) * sx + 0.5f; vy = (0.5f - qy) * sy + 0.5f }
+            else -> { vx = (qx - 0.5f) * sx + 0.5f; vy = (qy - 0.5f) * sy + 0.5f }
+        }
 
         // 前摄显示镜像（GL 中 S 矩阵 sx 取负，显示空间水平翻转）
         if (frontFacing) vx = 1f - vx
@@ -225,14 +239,14 @@ class CameraGlView(context: Context) : GLSurfaceView(context) {
             if (program == 0) return
             val st = surfaceTexture ?: return
 
-            // 消费帧 + 缓冲裁剪/翻转
+            // 消费帧；ST 矩阵必须永远应用——它除相机变换外还背着 GL 采样必需的 y 翻转，
+            // 置成单位阵会让内容垂直镜像（正是"预览上下颠倒"的一种来源）
             try {
                 st.updateTexImage()
                 st.getTransformMatrix(stMatrix)
             } catch (e: Exception) {
                 return // ST 与渲染线程竞态被释放：跳过本帧
             }
-            if (!hasCameraTransform) Matrix.setIdentityM(stMatrix, 0)
 
             val bw = if (bufferWidth > 0) bufferWidth else 640
             val bh = if (bufferHeight > 0) bufferHeight else 480
@@ -259,10 +273,12 @@ class CameraGlView(context: Context) : GLSurfaceView(context) {
             val sy = if (ratio >= 1f) 1f else 1f / ratio
             if (frontFacing) sx = -sx
 
-            // uMvp = S(铺满/镜像) * R(转正；Android 约定顺时针为正，NDC 取负角) * C(裁剪)
+            // uMvp = S(铺满/镜像) * R(仅在 ST 未含相机变换时补) * C(裁剪)
+            // hasCameraTransform=true：传感器→正立的旋转已在 ST 矩阵里，再叠 R 会双重旋转（侧转90°）；
+            // false：需手动补 -rot（CameraX 顺时针为正，NDC 取负角）
             Matrix.setIdentityM(mvpMatrix, 0)
             Matrix.scaleM(mvpMatrix, 0, sx, sy, 1f)
-            if (rot != 0) Matrix.rotateM(mvpMatrix, 0, -rot.toFloat(), 0f, 0f, 1f)
+            if (!hasCameraTransform && rot != 0) Matrix.rotateM(mvpMatrix, 0, -rot.toFloat(), 0f, 0f, 1f)
             Matrix.multiplyMM(tmpMatrix, 0, mvpMatrix, 0, cropMatrix, 0)
 
             GLES20.glUseProgram(program)
