@@ -71,6 +71,28 @@ data class FilterParams(
     val skinSoften: Float = 0f,
     val skinBrighten: Float = 0f,
 ) {
+    /** 是否与中性参数等效（无可见效果）。烘焙前据此跳过 GL 离屏处理。 */
+    fun isNeutral(): Boolean {
+        fun Float.eq(b: Float) = kotlin.math.abs(this - b) < 1e-4f
+        fun Vec3.eq(b: Vec3) = r.eq(b.r) && g.eq(b.g) && this.b.eq(b.b)
+        val n = NEUTRAL
+        return exposure.eq(n.exposure) && contrast.eq(n.contrast) &&
+            saturation.eq(n.saturation) && vibrance.eq(n.vibrance) &&
+            temperature.eq(n.temperature) && tint.eq(n.tint) &&
+            highlights.eq(n.highlights) && shadows.eq(n.shadows) &&
+            whites.eq(n.whites) && blacks.eq(n.blacks) &&
+            fade.eq(n.fade) && gamma.eq(n.gamma) &&
+            lift.eq(n.lift) && gain.eq(n.gain) &&
+            shadowTint.eq(n.shadowTint) && highlightTint.eq(n.highlightTint) &&
+            splitBalance.eq(n.splitBalance) &&
+            grain.eq(n.grain) && grainSize.eq(n.grainSize) && vignette.eq(n.vignette) &&
+            chromaAberration.eq(n.chromaAberration) && halation.eq(n.halation) &&
+            bloom.eq(n.bloom) && soften.eq(n.soften) && sharpen.eq(n.sharpen) &&
+            posterize.eq(n.posterize) && scanline.eq(n.scanline) &&
+            skinSoften.eq(n.skinSoften) && skinBrighten.eq(n.skinBrighten) &&
+            (colorMatrix == null || colorMatrix == n.colorMatrix)
+    }
+
     companion object {
         /** 中性参数：所有滤镜强度的起点 */
         val NEUTRAL = FilterParams()

@@ -18,6 +18,7 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
         .stateIn(viewModelScope, SharingStarted.Eagerly, CameraSettings())
 
     fun setSaveOriginal(v: Boolean) = launch { repo.setSaveOriginal(v) }
+    fun setGridType(v: com.dokacam.camera.data.model.GridType) = launch { repo.setGridType(v) }
     fun setShutterSound(v: Boolean) = launch { repo.setShutterSound(v) }
     fun setTapToCapture(v: Boolean) = launch { repo.setTapToCapture(v) }
     fun setLevelEnabled(v: Boolean) = launch { repo.setLevelEnabled(v) }

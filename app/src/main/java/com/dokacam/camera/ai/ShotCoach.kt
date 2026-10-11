@@ -34,7 +34,11 @@ data class ShotAdvice(
     val isPortrait: Boolean = false,
     val suggestedZoom: Float? = null,
     val exposureTip: String? = null,
+    /** 暗光（avgLuma 低于曝光建议阈值）—— 教练卡据此给「一键开手电」可点建议 */
+    val lowLight: Boolean = false,
     val ready: Boolean = false,
+    /** AI 滤镜推荐 Top-1（场景+光线打分）；null = 暂无推荐 */
+    val filterRec: FilterRecommender.Recommendation? = null,
 )
 
 /**
@@ -91,6 +95,8 @@ class ShotCoach(context: Context, private val scope: CoroutineScope) {
     fun clear() {
         latestFrame.getAndSet(null)?.recycle()
         _advice.value = ShotAdvice()
+        lastRec = null
+        lastRecScene = ""
     }
 
     /** 释放 MediaPipe 引擎。等在途分析收尾后再关，避免 use-after-close。 */
@@ -103,6 +109,11 @@ class ShotCoach(context: Context, private val scope: CoroutineScope) {
 
     // ------------------------------------------------------------------
 
+    // 滤镜推荐节流：场景不变时 4 秒内复用上次结果，避免角标闪烁
+    private var lastRecScene = ""
+    private var lastRecTime = 0L
+    private var lastRec: FilterRecommender.Recommendation? = null
+
     private suspend fun analyze(frame: Bitmap): ShotAdvice {
         val comp = analyzer.analyze(frame)
         val stats = FilterRecommender.analyzeFrame(frame)
@@ -112,6 +123,13 @@ class ShotCoach(context: Context, private val scope: CoroutineScope) {
         val exposure = exposureFor(stats.avgLuma, stats.contrast)
         // 无引导方向或仅「端稳」即视为构图到位
         val ready = comp.score >= 80 && comp.directions.all { it == GuideDirection.HOLD_STEADY }
+
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (lastRec == null || comp.sceneKey != lastRecScene || now - lastRecTime > 4000) {
+            lastRec = FilterRecommender.recommend(comp.sceneKey, stats).firstOrNull()
+            lastRecScene = comp.sceneKey
+            lastRecTime = now
+        }
 
         return ShotAdvice(
             score = comp.score,
@@ -124,7 +142,9 @@ class ShotCoach(context: Context, private val scope: CoroutineScope) {
             isPortrait = comp.isPortrait,
             suggestedZoom = zoom,
             exposureTip = exposure,
+            lowLight = stats.avgLuma < 0.32f,
             ready = ready,
+            filterRec = lastRec,
         )
     }
 

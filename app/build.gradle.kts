@@ -22,7 +22,7 @@ android {
         versionName = "1.0.0"
 
         vectorDrawables.useSupportLibrary = true
-        // 只保留真机 ABI：砍掉 x86/x86_64 模拟器库（MediaPipe native 占 ~28MB）
+        // 默认只保留真机 ARM ABI（MediaPipe native 占 ~28MB）；debug 额外加回 x86_64 供模拟器
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
     }
 
@@ -30,6 +30,8 @@ android {
         debug {
             applicationIdSuffix = ".debug"
             isMinifyEnabled = false
+            // x86_64 模拟器无 ARM 转译时，缺 x86_64 so 会 INSTALL_FAILED_NO_MATCHING_ABIS 装不上
+            ndk { abiFilters += listOf("x86_64") }
         }
         release {
             isMinifyEnabled = true

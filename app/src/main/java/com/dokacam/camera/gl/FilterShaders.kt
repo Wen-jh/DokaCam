@@ -223,8 +223,11 @@ void main() {
             col += hp * vec3(1.15, 0.35, 0.20) * uHalation * 0.9;
         }
         if (uSharpen > 0.005) {
-            vec3 blur = blur9(uv, 1.4);
-            col += (col - blur) * uSharpen * 1.6;
+            // 单 pass 拿不到「处理后画面」的模糊图，blur9 采的是原始纹理；
+            // 只取亮度差做锐化 —— 否则前面环节（如黑白化）改过的颜色会被当细节
+            // 加回来，饱和物体染上互补色晕（预览 quality=0 无此环节，成片必须对齐）
+            float sharpD = luma(col) - luma(blur9(uv, 1.4));
+            col += sharpD * uSharpen * 1.6;
         }
     }
 

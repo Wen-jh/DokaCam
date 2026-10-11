@@ -29,6 +29,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.dokacam.camera.data.model.AspectRatio
+import com.dokacam.camera.data.model.GridType
 
 /**
  * 设置页：拍摄 / 画质 / 水印 / AI 四组开关。
@@ -63,6 +64,12 @@ fun SettingsScreen(onBack: () -> Unit) {
             ToggleRow("触屏拍摄", "点击取景器任意处即拍照", s.tapToCapture, vm::setTapToCapture)
             ToggleRow("水平仪", "取景时显示水平提示", s.levelEnabled, vm::setLevelEnabled)
             ToggleRow("前置镜像", "自拍预览与成片水平翻转", s.mirrorFrontCamera, vm::setMirrorFront)
+            // 网格类型（取景器构图线样式）
+            ChoiceRow(
+                "网格类型",
+                GridType.entries.map { it.label },
+                s.gridType.label,
+            ) { vm.setGridType(GridType.fromLabel(it)) }
             // 画幅
             ChoiceRow(
                 "画幅比例",

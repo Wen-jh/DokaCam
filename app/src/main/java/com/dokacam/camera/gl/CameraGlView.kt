@@ -14,6 +14,7 @@ import android.view.Surface
 import androidx.camera.core.SurfaceRequest
 import androidx.core.content.ContextCompat
 import com.dokacam.camera.camera.CameraController
+import com.dokacam.camera.data.model.FilterParams
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
@@ -27,6 +28,7 @@ class CameraGlView(context: Context) : GLSurfaceView(context) {
 
     @Volatile private var surfaceTexture: SurfaceTexture? = null
     @Volatile private var pendingRequest: SurfaceRequest? = null
+    @Volatile private var filterParams: FilterParams = FilterParams.NEUTRAL
 
     @Volatile var bufferWidth = 0
         private set
@@ -61,11 +63,21 @@ class CameraGlView(context: Context) : GLSurfaceView(context) {
 
     init {
         preserveEGLContextOnPause = true
-        setEGLContextClientVersion(2)
+        // minSdk 26 设备全量支持 GLES3；Uber-Shader（FilterShaders）需要 ES 3.0
+        setEGLContextClientVersion(3)
         // setRenderer 必须先于 renderMode：GL 线程由 setRenderer 创建，
         // 顺序颠倒会在构造时 NPE 闪退（5595c03 引入，真机已复现）
         setRenderer(PreviewRenderer())
         renderMode = RENDERMODE_WHEN_DIRTY
+    }
+
+    /**
+     * 下发滤镜参数（任意线程）。@Volatile + WHEN_DIRTY 重绘，
+     * GL 线程在下一帧 onDrawFrame 读取快照。中性参数时画面与直通一致。
+     */
+    fun setFilterParams(params: FilterParams) {
+        filterParams = params
+        requestRender()
     }
 
     fun supplySurfaceRequest(request: SurfaceRequest) {
@@ -133,6 +145,48 @@ class CameraGlView(context: Context) : GLSurfaceView(context) {
         return Pair(vx.coerceIn(0f, 1f), vy.coerceIn(0f, 1f))
     }
 
+    /**
+     * 视图归一化坐标 → 预览缓冲归一化坐标（[mapAnalysisPointToView] 的逆变换，
+     * 逆序执行：撤前摄镜像 → 撤 rotTotal 的 FILL_CENTER 映射 → 撤 cropRect 归一化）。
+     * 结果落在 SurfaceRequest 缓冲坐标系（y 向下），供对焦测光喂
+     * SurfaceOrientedMeteringPointFactory(bufferWidth, bufferHeight)。
+     */
+    fun mapViewPointToBuffer(vxIn: Float, vyIn: Float): Pair<Float, Float> {
+        val bw = if (bufferWidth > 0) bufferWidth else 640
+        val bh = if (bufferHeight > 0) bufferHeight else 480
+        val rotTotal = (rotationDegrees + orientationCompCw) % 360
+        val crop = cropRect
+        val cw = if (crop != null && crop.width() > 0) crop.width() else bw
+        val ch = if (crop != null && crop.height() > 0) crop.height() else bh
+
+        // 逆步骤1：撤前摄显示镜像
+        var vx = vxIn
+        val vy = vyIn
+        if (frontFacing) vx = 1f - vx
+
+        // 逆步骤2：FILL_CENTER → cropRect 内归一化 (qx,qy)，系数与正向映射同源
+        val contentAspect = if (rotTotal == 90 || rotTotal == 270) ch.toFloat() / cw else cw.toFloat() / ch
+        val viewAspect = if (width > 0 && height > 0) width.toFloat() / height else 9f / 16f
+        val ratio = if (viewAspect > 0f) contentAspect / viewAspect else 1f
+        val sx = if (ratio >= 1f) ratio else 1f
+        val sy = if (ratio >= 1f) 1f else 1f / ratio
+        val qx: Float
+        val qy: Float
+        when (rotTotal) {
+            90  -> { qy = 0.5f - (vx - 0.5f) / sx; qx = (vy - 0.5f) / sy + 0.5f }
+            270 -> { qy = (vx - 0.5f) / sx + 0.5f; qx = 0.5f - (vy - 0.5f) / sy }
+            180 -> { qx = 0.5f - (vx - 0.5f) / sx; qy = 0.5f - (vy - 0.5f) / sy }
+            else -> { qx = (vx - 0.5f) / sx + 0.5f; qy = (vy - 0.5f) / sy + 0.5f }
+        }
+
+        // 逆步骤3：cropRect 归一化 → 缓冲归一化
+        val cL = (crop?.left ?: 0) / bw.toFloat()
+        val cT = (crop?.top ?: 0) / bh.toFloat()
+        val nx = cL + qx.coerceIn(0f, 1f) * cw / bw
+        val ny = cT + qy.coerceIn(0f, 1f) * ch / bh
+        return Pair(nx.coerceIn(0f, 1f), ny.coerceIn(0f, 1f))
+    }
+
     private fun attachSurface(st: SurfaceTexture, request: SurfaceRequest) {
         val resolution = request.resolution
         bufferWidth = resolution.width
@@ -166,12 +220,7 @@ class CameraGlView(context: Context) : GLSurfaceView(context) {
 
     private inner class PreviewRenderer : GLSurfaceView.Renderer {
 
-        private var program = 0
-        private var aPosition = 0
-        private var aTexCoord = 0
-        private var uMvp = 0
-        private var uStMatrix = 0
-        private var uTexture = 0
+        private var filterProg: FilterProgram? = null
         private var textureId = 0
 
         private val stMatrix = FloatArray(16)
@@ -180,29 +229,23 @@ class CameraGlView(context: Context) : GLSurfaceView(context) {
         private val tmpMatrix = FloatArray(16)
         private var surfaceWidth = 1
         private var surfaceHeight = 1
+        private var startNanos = 0L
 
         private lateinit var vertexBuffer: FloatBuffer
         private lateinit var texBuffer: FloatBuffer
 
+        // ES3 版顶点着色器：MVP/纹理矩阵链与 ES2 直通版完全一致，
+        // 只换语法（attribute/varying → in/out），几何行为不变
         private val vertexCode = """
-            attribute vec2 aPosition;
-            attribute vec2 aTexCoord;
+            #version 300 es
+            in vec2 aPosition;
+            in vec2 aTexCoord;
             uniform mat4 uMvp;
             uniform mat4 uStMatrix;
-            varying vec2 vTexCoord;
+            out vec2 vTexCoord;
             void main() {
                 gl_Position = uMvp * vec4(aPosition, 0.0, 1.0);
                 vTexCoord = (uStMatrix * vec4(aTexCoord, 0.0, 1.0)).xy;
-            }
-        """.trimIndent()
-
-        private val fragmentCode = """
-            #extension GL_OES_EGL_image_external : require
-            precision mediump float;
-            varying vec2 vTexCoord;
-            uniform samplerExternalOES uTexture;
-            void main() {
-                gl_FragColor = texture2D(uTexture, vTexCoord);
             }
         """.trimIndent()
 
@@ -212,16 +255,13 @@ class CameraGlView(context: Context) : GLSurfaceView(context) {
             surfaceTexture?.release()
             surfaceTexture = null
 
-            program = buildProgram()
-            if (program == 0) {
-                Log.e(TAG, "shader program failed; preview will stay black")
+            val prog = FilterProgram(vertexCode, FilterShaders.fragmentForOes())
+            if (!prog.isValid()) {
+                Log.e(TAG, "filter shader program failed; preview will stay black")
                 return
             }
-            aPosition = GLES20.glGetAttribLocation(program, "aPosition")
-            aTexCoord = GLES20.glGetAttribLocation(program, "aTexCoord")
-            uMvp = GLES20.glGetUniformLocation(program, "uMvp")
-            uStMatrix = GLES20.glGetUniformLocation(program, "uStMatrix")
-            uTexture = GLES20.glGetUniformLocation(program, "uTexture")
+            filterProg = prog
+            startNanos = System.nanoTime()
 
             vertexBuffer = floatBuffer(floatArrayOf(-1f, -1f, 1f, -1f, -1f, 1f, 1f, 1f))
             texBuffer = floatBuffer(floatArrayOf(0f, 0f, 1f, 0f, 0f, 1f, 1f, 1f))
@@ -254,7 +294,7 @@ class CameraGlView(context: Context) : GLSurfaceView(context) {
         override fun onDrawFrame(gl: GL10?) {
             GLES20.glClearColor(0f, 0f, 0f, 1f)
             GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
-            if (program == 0) return
+            val prog = filterProg ?: return
             val st = surfaceTexture ?: return
 
             // 消费帧；ST 矩阵必须永远应用——它除相机变换外还背着 GL 采样必需的 y 翻转，
@@ -307,13 +347,18 @@ class CameraGlView(context: Context) : GLSurfaceView(context) {
             }
             Matrix.multiplyMM(tmpMatrix, 0, mvpMatrix, 0, cropMatrix, 0)
 
-            GLES20.glUseProgram(program)
+            prog.use()
             GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
             GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, textureId)
-            GLES20.glUniform1i(uTexture, 0)
-            GLES20.glUniformMatrix4fv(uMvp, 1, false, tmpMatrix, 0)
-            GLES20.glUniformMatrix4fv(uStMatrix, 1, false, stMatrix, 0)
+            prog.loc("uTexture").takeIf { it >= 0 }?.let { GLES20.glUniform1i(it, 0) }
+            prog.setMatrix("uMvp", tmpMatrix)
+            prog.setMatrix("uStMatrix", stMatrix)
+            // 预览档 quality=0（关色散/光晕/锐化保帧率）；镜像已由 MVP 几何层处理，uMirror=0
+            val timeSec = (System.nanoTime() - startNanos) / 1_000_000_000f
+            prog.applyParams(filterParams, bw, bh, timeSec, quality = 0f, mirror = 0f)
 
+            val aPosition = prog.aPosition
+            val aTexCoord = prog.aTexCoord
             GLES20.glEnableVertexAttribArray(aPosition)
             GLES20.glVertexAttribPointer(aPosition, 2, GLES20.GL_FLOAT, false, 0, vertexBuffer)
             GLES20.glEnableVertexAttribArray(aTexCoord)
@@ -321,37 +366,6 @@ class CameraGlView(context: Context) : GLSurfaceView(context) {
             GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
             GLES20.glDisableVertexAttribArray(aPosition)
             GLES20.glDisableVertexAttribArray(aTexCoord)
-        }
-
-        private fun buildProgram(): Int {
-            fun shader(type: Int, src: String): Int {
-                val s = GLES20.glCreateShader(type)
-                GLES20.glShaderSource(s, src)
-                GLES20.glCompileShader(s)
-                val status = IntArray(1)
-                GLES20.glGetShaderiv(s, GLES20.GL_COMPILE_STATUS, status, 0)
-                if (status[0] == 0) {
-                    Log.e(TAG, "shader compile failed: ${GLES20.glGetShaderInfoLog(s)}")
-                    GLES20.glDeleteShader(s)
-                    return 0
-                }
-                return s
-            }
-            val vs = shader(GLES20.GL_VERTEX_SHADER, vertexCode)
-            val fs = shader(GLES20.GL_FRAGMENT_SHADER, fragmentCode)
-            if (vs == 0 || fs == 0) return 0
-            val p = GLES20.glCreateProgram()
-            GLES20.glAttachShader(p, vs)
-            GLES20.glAttachShader(p, fs)
-            GLES20.glLinkProgram(p)
-            val status = IntArray(1)
-            GLES20.glGetProgramiv(p, GLES20.GL_LINK_STATUS, status, 0)
-            if (status[0] == 0) {
-                Log.e(TAG, "program link failed: ${GLES20.glGetProgramInfoLog(p)}")
-                GLES20.glDeleteProgram(p)
-                return 0
-            }
-            return p
         }
 
         private fun floatBuffer(values: FloatArray): FloatBuffer =

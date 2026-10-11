@@ -24,6 +24,7 @@ enum class GridType(val label: String) {
 
     companion object {
         fun fromName(name: String) = entries.firstOrNull { it.name == name } ?: OFF
+        fun fromLabel(label: String) = entries.firstOrNull { it.label == label } ?: OFF
     }
 }
 

@@ -13,7 +13,7 @@ import java.nio.FloatBuffer
 
 /**
  * OpenGL 工具集：纹理创建、缓冲构造、错误检查、Bitmap 读写。
- * 统一用 GLES30（设备最低要求 API 24，ES 3.0 覆盖率 ~99%）。
+ * 统一用 GLES30（minSdk 26，ES 3.0 全量可用）。
  */
 object GlUtil {
 
