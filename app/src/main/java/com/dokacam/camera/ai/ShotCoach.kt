@@ -39,6 +39,12 @@ data class ShotAdvice(
     val ready: Boolean = false,
     /** AI 滤镜推荐 Top-1（场景+光线打分）；null = 暂无推荐 */
     val filterRec: FilterRecommender.Recommendation? = null,
+    /** 姿态检测结果（仅姿势模板模式开启时非空；未检出人物时也为 null） */
+    val pose: PoseFrame? = null,
+    /** 姿势模板模式运行中（UI 据此区分「未检出」与「没开检测」） */
+    val poseModeOn: Boolean = false,
+    /** 带 COCO 标签的物体检测（姿势模板场景锚定用，如 "chair"/"couch"） */
+    val objects: List<ObjectHit> = emptyList(),
 )
 
 /**
@@ -62,6 +68,9 @@ class ShotCoach(context: Context, private val scope: CoroutineScope) {
 
     private val analysisJob: Job
     @Volatile private var closed = false
+
+    /** 姿势模板模式开关（由 UI 设置）：开启时每帧额外跑 PoseLandmarker */
+    @Volatile var poseModeEnabled = false
 
     init {
         analysisJob = scope.launch(Dispatchers.Default) {
@@ -117,6 +126,8 @@ class ShotCoach(context: Context, private val scope: CoroutineScope) {
     private suspend fun analyze(frame: Bitmap): ShotAdvice {
         val comp = analyzer.analyze(frame)
         val stats = FilterRecommender.analyzeFrame(frame)
+        // 姿态推理只在模板模式开启时跑（GPU 优先，引擎内部自带降级）
+        val pose = if (poseModeEnabled) analyzer.detectPose(frame) else null
 
         val area = comp.subjects.maxOfOrNull { it.width() * it.height() } ?: 0f
         val zoom = zoomFor(area)
@@ -145,6 +156,9 @@ class ShotCoach(context: Context, private val scope: CoroutineScope) {
             lowLight = stats.avgLuma < 0.32f,
             ready = ready,
             filterRec = lastRec,
+            pose = pose,
+            poseModeOn = poseModeEnabled,
+            objects = comp.objects,
         )
     }
 

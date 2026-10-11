@@ -7,10 +7,18 @@ import com.dokacam.camera.data.model.GuideDirection
 import com.google.mediapipe.framework.image.BitmapImageBuilder
 import com.google.mediapipe.framework.image.MPImage
 import com.google.mediapipe.tasks.core.BaseOptions
+import com.google.mediapipe.tasks.core.Delegate
 import com.google.mediapipe.tasks.vision.facelandmarker.FaceLandmarker
 import com.google.mediapipe.tasks.vision.objectdetector.ObjectDetector
+import com.google.mediapipe.tasks.vision.poselandmarker.PoseLandmarker
 import kotlin.math.abs
 import kotlin.math.sqrt
+
+/** 单个姿态关键点（归一化 0..1，分析帧坐标系，y 向下） */
+data class PoseLandmark(val x: Float, val y: Float, val visibility: Float)
+
+/** 一帧的姿态检测结果：33 关键点 + 帧宽高比（像素空间距离计算用） */
+data class PoseFrame(val landmarks: List<PoseLandmark>, val aspect: Float)
 
 /**
  * 构图分析结果（归一化坐标 0..1）
@@ -23,6 +31,8 @@ data class CompositionResult(
     val advice: String,                // 一句话建议
     val sceneKey: String,              // 场景标签（供教练卡展示）
     val isPortrait: Boolean,
+    /** 带 COCO 标签的完整物体检测（供姿势模板场景锚定按类名取框） */
+    val objects: List<ObjectHit> = emptyList(),
 )
 
 /** 物体检测结果：归一化框 + COCO 类别名 */
@@ -51,8 +61,14 @@ class CompositionAnalyzer(context: Context) {
     /** 模型位于 assets/；初始化失败返回 null 并永久降级，不逐帧重试 */
     @Volatile private var faceEngine: FaceLandmarker? = null
     @Volatile private var objectEngine: ObjectDetector? = null
+    @Volatile private var poseEngine: PoseLandmarker? = null
     @Volatile private var faceEngineFailed = false
     @Volatile private var objectEngineFailed = false
+    @Volatile private var poseEngineFailed = false
+    /** GPU 推理运行期失败时置 true，下次起回退 CPU */
+    @Volatile private var poseGpuFailed = false
+    /** 姿态推理运行期连续失败计数：限频告警；CPU 持续失败则永久降级 */
+    @Volatile private var poseFailStreak = 0
 
     private fun faceEngineOrNull(): FaceLandmarker? {
         if (faceEngineFailed) return null
@@ -105,9 +121,102 @@ class CompositionAnalyzer(context: Context) {
         }
     }
 
+    /**
+     * 姿态引擎懒加载（与 faceEngineOrNull 同模式：失败永久降级，不逐帧重试）。
+     * 优先 GPU delegate，初始化失败即回退 CPU。
+     */
+    private fun poseEngineOrNull(): PoseLandmarker? {
+        if (poseEngineFailed) return null
+        poseEngine?.let { return it }
+        synchronized(engineLock) {
+            if (poseEngineFailed) return null
+            poseEngine?.let { return it }
+            return try {
+                createPoseEngine(if (poseGpuFailed) Delegate.CPU else Delegate.GPU)
+            } catch (t: Throwable) {
+                android.util.Log.w(TAG, "PoseLandmarker init failed (gpu=$poseGpuFailed): ${t.message}")
+                if (!poseGpuFailed) {
+                    poseGpuFailed = true
+                    try {
+                        createPoseEngine(Delegate.CPU)
+                    } catch (t2: Throwable) {
+                        android.util.Log.w(TAG, "PoseLandmarker CPU init failed: ${t2.message}")
+                        poseEngineFailed = true
+                        null
+                    }
+                } else {
+                    poseEngineFailed = true
+                    null
+                }
+            }.also { poseEngine = it }
+        }
+    }
+
+    private fun createPoseEngine(delegate: Delegate): PoseLandmarker =
+        PoseLandmarker.createFromOptions(
+            appContext,
+            PoseLandmarker.PoseLandmarkerOptions.builder()
+                .setBaseOptions(
+                    BaseOptions.builder()
+                        .setModelAssetPath("pose_landmarker_lite.task")
+                        .setDelegate(delegate)
+                        .build()
+                )
+                .setNumPoses(1)
+                .setMinPoseDetectionConfidence(0.3f)
+                .setMinPosePresenceConfidence(0.3f)
+                .setMinTrackingConfidence(0.3f)
+                .build(),
+        )
+
     fun close() {
         runCatching { faceEngine?.close() }
         runCatching { objectEngine?.close() }
+        runCatching { poseEngine?.close() }
+    }
+
+    /**
+     * 检测一帧中的人物姿态（仅模板模式调用，不在常规构图分析里跑）。
+     * 返回主人物的 33 归一化关键点；未检出或引擎不可用时返回 null。
+     * GPU 推理运行期抛错 → 关闭引擎并标记回退，下次重建 CPU 实例；
+     * CPU 连续失败 100 帧 → 永久降级（同初始化失败），不再逐帧重试。
+     */
+    fun detectPose(frame: Bitmap): PoseFrame? {
+        val engine = poseEngineOrNull() ?: return null
+        return try {
+            val image: MPImage = BitmapImageBuilder(frame).build()
+            val pose = engine.detect(image).landmarks().firstOrNull() ?: return null
+            if (pose.size < 33) return null
+            poseFailStreak = 0
+            PoseFrame(
+                landmarks = pose.map {
+                    PoseLandmark(it.x(), it.y(), it.visibility().orElse(0f))
+                },
+                aspect = frame.width.toFloat() / frame.height.toFloat(),
+            )
+        } catch (t: Throwable) {
+            poseFailStreak++
+            // 限频告警：首次 + 每 30 次一条，避免逐帧刷日志
+            if (poseFailStreak == 1 || poseFailStreak % 30 == 0) {
+                android.util.Log.w(TAG, "pose detect failed x$poseFailStreak: ${t.message}")
+            }
+            if (!poseGpuFailed) {
+                // 可能是 GPU delegate 运行期故障：降级 CPU 重建
+                poseGpuFailed = true
+                synchronized(engineLock) {
+                    runCatching { poseEngine?.close() }
+                    poseEngine = null
+                }
+            } else if (poseFailStreak >= 100) {
+                // CPU 持续失败：与初始化失败同样处理，永久降级不再逐帧重试
+                poseEngineFailed = true
+                synchronized(engineLock) {
+                    runCatching { poseEngine?.close() }
+                    poseEngine = null
+                }
+            }
+            null
+        }
     }
 
     /** 分析一帧（输入已由 AnalysisUtils 旋转到显示方向、缩到 ≤480px）。 */
@@ -127,6 +236,7 @@ class CompositionAnalyzer(context: Context) {
                 advice = "未检测到明显主体，试试靠近一点",
                 sceneKey = classifyScene(null, labels, faces),
                 isPortrait = faces.isNotEmpty(),
+                objects = objects,
             )
         } else {
             val (score, dirs) = evaluateComposition(primary, faces)
@@ -138,6 +248,7 @@ class CompositionAnalyzer(context: Context) {
                 advice = adviceFor(dirs, score),
                 sceneKey = classifyScene(primary, labels, faces),
                 isPortrait = faces.isNotEmpty(),
+                objects = objects,
             )
         }
     }
