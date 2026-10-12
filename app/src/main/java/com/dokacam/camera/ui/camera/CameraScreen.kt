@@ -1472,15 +1472,16 @@ private fun PoseGuideOverlay(
             strokePx = 2.dp.toPx(),
         )
 
-        // 模板参考轮廓：手绘线条画按内容包围盒适配
+        // 模板参考轮廓：剪影填色画按内容包围盒适配（半透明色块 + 描边，轻过实时场景）
         if (artPaths.isNotEmpty()) {
             val top = maxOf(area.top * h, 132.dp.toPx())
             val dst = Rect(area.left * w, top, area.right * w, area.bottom * h)
             drawArtPaths(
                 artPaths, dst, gold.copy(alpha = 0.8f),
-                strokePx = 3.dp.toPx(),
+                strokePx = 2.dp.toPx(),
                 alignBottom = template.category == PoseCategory.FULL,
                 fitContent = true,
+                fillAlpha = 0.35f,
             )
         }
 

@@ -11,6 +11,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Fill
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.drawscope.translate
@@ -30,25 +31,39 @@ private val SEG_GOOD = Color(0xFF3DDC84)
 private val SEG_BAD = Color(0xFFFF5252)
 
 // ------------------------------------------------------------------
-// 艺术线条画（line art）：SVG path 数据（M/L/C/Q/Z 绝对坐标，0-100 视框）
+// 剪影填色画（silhouette）：SVG path 数据（M/L/C/Q/Z 绝对坐标，0-100 视框）
+
+/** 一条子路径 + 是否闭合（闭合 = 剪影色块，先填色再描边） */
+data class ArtSubPath(val path: Path, val closed: Boolean)
 
 /**
- * 极简 SVG path 解析 → Compose Path 列表（每条 M 起一条子路径）。
+ * 极简 SVG path 解析 → 子路径列表（每条 M 起一条子路径）。
  * 仅支持绝对坐标 M/L/C/Q/Z，非法段跳过（断线比乱线好）。
  */
-fun parseArtPaths(d: String): List<Path> {
+fun parseArtPaths(d: String): List<ArtSubPath> {
     val tokens = Regex("([MLCQZ])|(-?\\d+\\.?\\d*)").findAll(d).map { it.value }.toList()
-    val out = ArrayList<Path>()
+    val out = ArrayList<ArtSubPath>()
     var cur: Path? = null
     var i = 0
     var cmd = ' '
     fun num(k: Int) = tokens.getOrNull(k)?.toFloatOrNull() ?: Float.NaN
     while (i < tokens.size) {
         val t = tokens[i]
-        if (t.length == 1 && t[0] in "MLCQZ") { cmd = t[0]; i++; if (cmd == 'Z') { cur?.close(); cur = null }; continue }
+        if (t.length == 1 && t[0] in "MLCQZ") {
+            cmd = t[0]; i++
+            if (cmd == 'Z') {
+                cur?.close()
+                // 标记最近一条子路径为闭合
+                for (k in out.indices.reversed()) {
+                    if (!out[k].closed && out[k].path === cur) { out[k] = out[k].copy(closed = true); break }
+                }
+                cur = null
+            }
+            continue
+        }
         when (cmd) {
             'M' -> {
-                val p = Path(); p.moveTo(num(i), num(i + 1)); out += p; cur = p; i += 2; cmd = 'L'
+                val p = Path(); p.moveTo(num(i), num(i + 1)); out += ArtSubPath(p, false); cur = p; i += 2; cmd = 'L'
             }
             'L' -> { cur?.lineTo(num(i), num(i + 1)); i += 2 }
             'C' -> {
@@ -62,26 +77,28 @@ fun parseArtPaths(d: String): List<Path> {
 }
 
 /**
- * 把 0-100 视框的艺术线条等比缩放画进 [dst]（像素矩形）。
+ * 把 0-100 视框的剪影画等比缩放画进 [dst]（像素矩形）。
  * 水平居中；[alignBottom] 时底边对齐（锚定坐姿/站姿「坐/站」在目标上），否则垂直居中。
- * [fitContent] 时按线条实际包围盒（而非整个 0-100 视框）缩放适配，手绘内容更饱满；
+ * [fitContent] 时按内容实际包围盒（而非整个 0-100 视框）缩放适配，内容更饱满；
+ * [fillAlpha] > 0 时闭合子路径先按该透明度填色（剪影），再统一描边；
  * [strokePx] 为最终像素线宽（不受缩放影响），圆头圆角。
  */
 fun DrawScope.drawArtPaths(
-    paths: List<Path>,
+    paths: List<ArtSubPath>,
     dst: Rect,
     color: Color,
     strokePx: Float,
     alignBottom: Boolean = false,
     fitContent: Boolean = false,
+    fillAlpha: Float = 0f,
 ) {
     if (paths.isEmpty() || dst.width <= 0f || dst.height <= 0f) return
     val pad = if (fitContent) min(dst.width, dst.height) * 0.05f else 0f
     val (s, dx, dy) = if (fitContent) {
         var l = Float.MAX_VALUE; var t = Float.MAX_VALUE
         var r = -Float.MAX_VALUE; var b = -Float.MAX_VALUE
-        for (p in paths) {
-            val bd = p.getBounds()
+        for (sp in paths) {
+            val bd = sp.path.getBounds()
             if (!bd.left.isFinite() || bd.right <= bd.left || bd.bottom <= bd.top) continue
             l = min(l, bd.left); t = min(t, bd.top)
             r = max(r, bd.right); b = max(b, bd.bottom)
@@ -103,13 +120,17 @@ fun DrawScope.drawArtPaths(
     }
     translate(dx, dy) {
         scale(s, s, Offset.Zero) {
+            if (fillAlpha > 0f) {
+                val fill = color.copy(alpha = color.alpha * fillAlpha)
+                for (sp in paths) if (sp.closed) drawPath(sp.path, fill, style = Fill)
+            }
             val style = Stroke(width = strokePx / s, cap = StrokeCap.Round, join = StrokeJoin.Round)
-            for (p in paths) drawPath(p, color, style = style)
+            for (sp in paths) drawPath(sp.path, color, style = style)
         }
     }
 }
 
-/** 模板卡片示例图：艺术线条画（按内容包围盒适配，深色底由卡片提供） */
+/** 模板卡片示例图：剪影填色画（按内容包围盒适配，深色底由卡片提供） */
 @Composable
 fun PoseArtCanvas(
     artPath: String,
@@ -117,6 +138,7 @@ fun PoseArtCanvas(
     modifier: Modifier = Modifier,
     strokeWidth: Dp = 2.dp,
     alignBottom: Boolean = false,
+    fillAlpha: Float = 0.45f,
 ) {
     val paths = remember(artPath) { parseArtPaths(artPath) }
     Canvas(modifier) {
@@ -128,6 +150,7 @@ fun PoseArtCanvas(
             strokeWidth.toPx(),
             alignBottom = alignBottom,
             fitContent = true,
+            fillAlpha = fillAlpha,
         )
     }
 }
