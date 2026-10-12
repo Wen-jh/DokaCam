@@ -71,6 +71,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -98,6 +99,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.aicam.camera.BuildConfig
 import com.dokacam.camera.ai.PoseFrame
 import com.dokacam.camera.ai.PoseMatcher
+import com.dokacam.camera.ai.PoseRecommender
 import com.dokacam.camera.ai.ShotAdvice
 import com.dokacam.camera.ai.ShotCoach
 import com.dokacam.camera.camera.CameraController
@@ -109,6 +111,7 @@ import com.dokacam.camera.data.model.FilterParams
 import com.dokacam.camera.data.model.FilterPreset
 import com.dokacam.camera.data.model.GuideDirection
 import com.dokacam.camera.data.model.GridType
+import com.dokacam.camera.data.model.PosePoint
 import com.dokacam.camera.data.model.PoseTemplate
 import com.dokacam.camera.data.model.PoseTemplates
 import com.dokacam.camera.data.settings.SettingsRepository
@@ -119,6 +122,7 @@ import kotlin.math.atan2
 import kotlin.math.sqrt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -280,6 +284,9 @@ fun CameraScreen(
     var posePrevAiOn by remember { mutableStateOf<Boolean?>(null) }
     // 退出模板需切回镜头时暂存的变焦值：等 zoomRange 轮询更新后再钳制应用
     var posePendingZoom by remember { mutableStateOf<Float?>(null) }
+    // 姿势到位自动拍摄（P0-c）：ready → 3-2-1 倒计时 → 自动快门
+    var poseAutoCapture by remember { mutableStateOf(true) }
+    var poseCountdown by remember { mutableStateOf(0) }
 
     fun exitPoseTemplate() {
         coach.poseModeEnabled = false
@@ -443,6 +450,23 @@ fun CameraScreen(
             countdown = 0
             doCapture()
         }
+    }
+
+    // 姿势到位自动快门：ready 稳定后 3-2-1 倒计时自动拍摄；离开姿势后重新武装
+    LaunchedEffect(activeTemplateId, poseAutoCapture) {
+        if (activeTemplateId == null || !poseAutoCapture) return@LaunchedEffect
+        var armed = true
+        snapshotFlow { poseMatch?.ready == true }
+            .distinctUntilChanged()
+            .collect { ready ->
+                if (!ready) { armed = true; return@collect }
+                if (armed) {
+                    armed = false
+                    for (i in 3 downTo 1) { poseCountdown = i; delay(1000) }
+                    poseCountdown = 0
+                    doCapture()
+                }
+            }
     }
 
     var viewSize by remember { mutableStateOf(IntSize.Zero) }
@@ -682,11 +706,8 @@ fun CameraScreen(
             Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = flashOverlay.value)))
         }
 
-        if (countdown > 0) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("$countdown", color = Color.White, fontSize = 76.sp, fontWeight = FontWeight.Bold)
-            }
-        }
+        if (countdown > 0) CaptureCountdown(countdown)
+        if (poseCountdown > 0) CaptureCountdown(poseCountdown, caption = "保持姿势，自动拍摄")
 
         AnimatedVisibility(
             visible = controlsVisible,
@@ -788,6 +809,8 @@ fun CameraScreen(
                 match = poseMatch,
                 pitchDeg = pitchDeg,
                 anchorHint = anchorHint,
+                autoCapture = poseAutoCapture,
+                onToggleAutoCapture = { poseAutoCapture = !poseAutoCapture; poke() },
                 modifier = Modifier.align(Alignment.TopCenter)
                     .statusBarsPadding()
                     .padding(top = 118.dp, start = 16.dp, end = 16.dp),
@@ -803,6 +826,11 @@ fun CameraScreen(
                 PoseTemplatePanel(
                     templates = PoseTemplates.ALL,
                     selectedId = activeTemplateId,
+                    recommendations = remember(
+                        advice.objects.map { it.label }.toSet(), advice.lowLight, controller.frontFacing,
+                    ) {
+                        PoseRecommender.recommend(advice.objects, advice.lowLight, controller.frontFacing)
+                    },
                     onSelect = { id ->
                         if (id == null) exitPoseTemplate()
                         else applyPoseTemplate(PoseTemplates.byId.getValue(id))
@@ -1368,8 +1396,9 @@ private fun PoseGuideOverlay(
             )
         }
 
-        // 模板线条画
-        if (artPaths.isNotEmpty()) {
+        // 模板参考轮廓：手绘线条画优先，无则骨架自动渲染（同一 dst 映射）
+        val skeleton = template.skeleton
+        if (artPaths.isNotEmpty() || skeleton != null) {
             val alpha: Float
             val dst: Rect
             if (anchored && anchorBox != null) {
@@ -1396,10 +1425,14 @@ private fun PoseGuideOverlay(
                 // 模板要求锚定但没检出目标 → 淡显
                 alpha = if (template.anchorLabel != null) 0.25f else 0.8f
             }
-            drawArtPaths(
-                artPaths, dst, gold.copy(alpha = alpha),
-                strokePx = 3.dp.toPx(), alignBottom = anchored,
-            )
+            if (artPaths.isNotEmpty()) {
+                drawArtPaths(
+                    artPaths, dst, gold.copy(alpha = alpha),
+                    strokePx = 3.dp.toPx(), alignBottom = anchored,
+                )
+            } else if (skeleton != null) {
+                drawSkeletonFigure(skeleton, dst, gold.copy(alpha = alpha), alignBottom = anchored)
+            }
         }
 
         // 实时检测骨骼线（分析帧归一化 → 视图坐标，与 AI 主体框同一映射）
@@ -1422,47 +1455,115 @@ private fun PoseGuideOverlay(
     }
 }
 
-/** 模板选择面板：横向卡片（剪影示例图 + 名称 + 场景/焦段/机位），首位为「无」退出卡 */
+/** 模板选择面板：推荐条 + 横向模板卡片（剪影示例图 + 名称 + 场景/焦段/机位），首位为「无」退出卡 */
 @Composable
 private fun PoseTemplatePanel(
     templates: List<PoseTemplate>,
     selectedId: String?,
+    recommendations: List<PoseRecommender.Rec>,
     onSelect: (String?) -> Unit,
 ) {
     val gold = Color(0xFFF2C14E)
-    LazyRow(
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        contentPadding = PaddingValues(horizontal = 12.dp),
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
-            .background(Color.Black.copy(alpha = 0.55f))
-            .padding(vertical = 10.dp),
+    Column {
+        // 场景推荐：只在还没选中模板时提示，避免和引导卡抢注意力
+        if (recommendations.isNotEmpty() && selectedId == null) {
+            PoseRecommendStrip(recommendations, gold) { onSelect(it) }
+        }
+        LazyRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            contentPadding = PaddingValues(horizontal = 12.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .background(Color.Black.copy(alpha = 0.55f))
+                .padding(vertical = 10.dp),
+        ) {
+            item(key = "none") {
+                PoseTemplateCard(
+                    name = "无",
+                    subtitle = "退出模板",
+                    artPath = "",
+                    skeleton = null,
+                    placeholder = "",
+                    selected = selectedId == null,
+                    gold = gold,
+                ) { onSelect(null) }
+            }
+            items(templates, key = { it.id }) { t ->
+                PoseTemplateCard(
+                    name = t.name,
+                    subtitle = buildString {
+                        append(t.category.label)
+                        append(" · ").append(t.pitch.label)
+                        t.zoom?.let { append(" · ").append(if (it == it.toInt().toFloat()) "${it.toInt()}x" else "${it}x") }
+                    },
+                    artPath = t.artPath,
+                    skeleton = t.skeleton,
+                    placeholder = "技巧引导",
+                    selected = t.id == selectedId,
+                    gold = gold,
+                ) { onSelect(t.id) }
+            }
+        }
+    }
+}
+
+/** 「为你推荐」条：温柔地告诉用户现在拍什么最合适 */
+@Composable
+private fun PoseRecommendStrip(
+    recs: List<PoseRecommender.Rec>,
+    gold: Color,
+    onSelect: (String) -> Unit,
+) {
+    Column(Modifier.fillMaxWidth()) {
+        Row(
+            Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("✦ 为你推荐", color = gold, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.size(6.dp))
+            Text("根据当前场景", color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp)
+        }
+        LazyRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            contentPadding = PaddingValues(horizontal = 12.dp),
+        ) {
+            items(recs, key = { it.template.id }) { r ->
+                RecommendCard(r, gold) { onSelect(r.template.id) }
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+    }
+}
+
+@Composable
+private fun RecommendCard(rec: PoseRecommender.Rec, gold: Color, onClick: () -> Unit) {
+    val t = rec.template
+    Column(
+        Modifier
+            .size(width = 116.dp, height = 150.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(gold.copy(alpha = 0.10f))
+            .border(1.dp, gold.copy(alpha = 0.45f), RoundedCornerShape(10.dp))
+            .clickable { onClick() }
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        item(key = "none") {
-            PoseTemplateCard(
-                name = "无",
-                subtitle = "退出模板",
-                artPath = "",
-                placeholder = "",
-                selected = selectedId == null,
-                gold = gold,
-            ) { onSelect(null) }
+        if (t.artPath.isNotEmpty()) {
+            PoseArtCanvas(t.artPath, gold, Modifier.fillMaxWidth().weight(1f))
+        } else if (t.skeleton != null) {
+            SkeletonArtCanvas(t.skeleton, gold, Modifier.fillMaxWidth().weight(1f))
+        } else {
+            Spacer(Modifier.weight(1f))
         }
-        items(templates, key = { it.id }) { t ->
-            PoseTemplateCard(
-                name = t.name,
-                subtitle = buildString {
-                    append(t.category.label)
-                    append(" · ").append(t.pitch.label)
-                    t.zoom?.let { append(" · ").append(if (it == it.toInt().toFloat()) "${it.toInt()}x" else "${it}x") }
-                },
-                artPath = t.artPath,
-                placeholder = "技巧引导",
-                selected = t.id == selectedId,
-                gold = gold,
-            ) { onSelect(t.id) }
-        }
+        Spacer(Modifier.height(6.dp))
+        Text(t.name, color = gold, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+        Text(
+            rec.reason,
+            color = Color.White.copy(alpha = 0.72f),
+            fontSize = 10.sp,
+            maxLines = 2,
+        )
     }
 }
 
@@ -1471,6 +1572,7 @@ private fun PoseTemplateCard(
     name: String,
     subtitle: String,
     artPath: String,
+    skeleton: List<PosePoint>?,
     placeholder: String,
     selected: Boolean,
     gold: Color,
@@ -1486,26 +1588,25 @@ private fun PoseTemplateCard(
             .padding(horizontal = 10.dp, vertical = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        // 艺术线条示例图；无图模板用文字标签占位
-        if (artPath.isNotEmpty()) {
-            PoseArtCanvas(
+        // 示例图：手绘线条画优先，无则骨架自动渲染，再退文字占位
+        when {
+            artPath.isNotEmpty() -> PoseArtCanvas(
                 artPath = artPath,
                 color = if (selected) gold else Color.White.copy(alpha = 0.9f),
                 modifier = Modifier.fillMaxWidth().weight(1f),
             )
-        } else if (placeholder.isNotEmpty()) {
-            Box(
+            skeleton != null -> SkeletonArtCanvas(
+                skeleton = skeleton,
+                color = if (selected) gold else Color.White.copy(alpha = 0.9f),
+                modifier = Modifier.fillMaxWidth().weight(1f),
+            )
+            placeholder.isNotEmpty() -> Box(
                 Modifier.fillMaxWidth().weight(1f),
                 contentAlignment = Alignment.Center,
             ) {
-                Text(
-                    placeholder,
-                    color = Color.White.copy(alpha = 0.35f),
-                    fontSize = 11.sp,
-                )
+                Text(placeholder, color = Color.White.copy(alpha = 0.35f), fontSize = 11.sp)
             }
-        } else {
-            Spacer(Modifier.weight(1f))
+            else -> Spacer(Modifier.weight(1f))
         }
         Spacer(Modifier.height(6.dp))
         Text(
@@ -1529,6 +1630,8 @@ private fun PoseCoachCard(
     match: PoseMatcher.MatchResult?,
     pitchDeg: Float,
     anchorHint: String? = null,
+    autoCapture: Boolean = true,
+    onToggleAutoCapture: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val gold = Color(0xFFF2C14E)
@@ -1562,6 +1665,18 @@ private fun PoseCoachCard(
                 color = Color.White.copy(alpha = 0.6f), fontSize = 11.sp, maxLines = 1,
             )
             Spacer(Modifier.weight(1f))
+            Text(
+                if (autoCapture) "自动拍" else "手动拍",
+                color = if (autoCapture) gold else Color.White.copy(alpha = 0.55f),
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .background(if (autoCapture) gold.copy(alpha = 0.18f) else Color.White.copy(alpha = 0.08f))
+                    .clickable { onToggleAutoCapture() }
+                    .padding(horizontal = 8.dp, vertical = 3.dp),
+            )
+            Spacer(Modifier.size(7.dp))
             Text(
                 "技巧 ${tipIdx + 1}/${template.tips.size}",
                 color = Color.White.copy(alpha = 0.45f), fontSize = 10.sp,
@@ -1637,5 +1752,27 @@ private fun pitchHintFor(required: CameraPitch, deg: Float): String? = when (req
         deg > 25f -> "机位提示：手机太俯，立起来回到平视"
         deg < -25f -> "机位提示：手机太仰，压下去回到平视"
         else -> null
+    }
+}
+
+/** 拍摄倒计时：柔和衬底 + 金色圆环大数字；[caption] 用于自动拍摄时给一句安抚 */
+@Composable
+private fun CaptureCountdown(number: Int, caption: String? = null, modifier: Modifier = Modifier) {
+    if (number <= 0) return
+    val gold = Color(0xFFF2C14E)
+    Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.20f)))
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Box(Modifier.size(120.dp), contentAlignment = Alignment.Center) {
+                Canvas(Modifier.fillMaxSize()) {
+                    drawCircle(gold.copy(alpha = 0.85f), radius = 52.dp.toPx(), style = Stroke(width = 3.dp.toPx()))
+                }
+                Text("$number", color = gold, fontSize = 64.sp, fontWeight = FontWeight.Bold)
+            }
+            if (caption != null) {
+                Spacer(Modifier.height(10.dp))
+                Text(caption, color = Color.White.copy(alpha = 0.85f), fontSize = 13.sp)
+            }
+        }
     }
 }

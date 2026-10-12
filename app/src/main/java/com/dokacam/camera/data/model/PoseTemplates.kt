@@ -190,6 +190,153 @@ object PoseTemplates {
         PoseIdx.TOE_R to pp(0.80f, 0.98f, 0.5f),
     )
 
+    /** 夕阳剪影：双臂高举 V 形，站姿挺拔 */
+    private val SK_SUNSET_SILHOUETTE = skeleton(
+        PoseIdx.NOSE to pp(0f, -1.42f, 0.5f),
+        PoseIdx.EAR_L to pp(-0.15f, -1.40f, 0.3f),
+        PoseIdx.EAR_R to pp(0.15f, -1.40f, 0.3f),
+        PoseIdx.SHOULDER_L to pp(-0.30f, -1.0f),
+        PoseIdx.SHOULDER_R to pp(0.30f, -1.0f),
+        PoseIdx.ELBOW_L to pp(-0.44f, -1.30f),
+        PoseIdx.ELBOW_R to pp(0.44f, -1.30f),
+        PoseIdx.WRIST_L to pp(-0.40f, -1.66f),
+        PoseIdx.WRIST_R to pp(0.40f, -1.66f),
+        PoseIdx.HIP_L to pp(-0.20f, 0f),
+        PoseIdx.HIP_R to pp(0.20f, 0f),
+        PoseIdx.KNEE_L to pp(-0.20f, 1.0f),
+        PoseIdx.KNEE_R to pp(0.20f, 1.0f),
+        PoseIdx.ANKLE_L to pp(-0.22f, 1.92f),
+        PoseIdx.ANKLE_R to pp(0.22f, 1.92f),
+        PoseIdx.TOE_L to pp(-0.24f, 2.0f, 0.5f),
+        PoseIdx.TOE_R to pp(0.24f, 2.0f, 0.5f),
+    )
+
+    /** 草地俯拍：仰躺四肢自然摊开（俯拍视角，手脚向四周舒展） */
+    private val SK_GRASS_TOPDOWN = skeleton(
+        PoseIdx.NOSE to pp(0f, -1.38f, 0.5f),
+        PoseIdx.EAR_L to pp(-0.15f, -1.36f, 0.3f),
+        PoseIdx.EAR_R to pp(0.15f, -1.36f, 0.3f),
+        PoseIdx.SHOULDER_L to pp(-0.30f, -1.0f),
+        PoseIdx.SHOULDER_R to pp(0.30f, -1.0f),
+        PoseIdx.ELBOW_L to pp(-0.48f, -0.86f),
+        PoseIdx.ELBOW_R to pp(0.48f, -0.86f),
+        PoseIdx.WRIST_L to pp(-0.62f, -0.72f),
+        PoseIdx.WRIST_R to pp(0.62f, -0.72f),
+        PoseIdx.HIP_L to pp(-0.20f, 0f),
+        PoseIdx.HIP_R to pp(0.20f, 0f),
+        PoseIdx.KNEE_L to pp(-0.34f, 0.78f),
+        PoseIdx.KNEE_R to pp(0.34f, 0.78f),
+        PoseIdx.ANKLE_L to pp(-0.46f, 1.66f),
+        PoseIdx.ANKLE_R to pp(0.46f, 1.66f),
+        PoseIdx.TOE_L to pp(-0.52f, 1.76f, 0.5f),
+        PoseIdx.TOE_R to pp(0.52f, 1.76f, 0.5f),
+    )
+
+    /** 倚墙半身：斜倚抱胸，一腿屈膝踩墙 */
+    private val SK_WALL_LEAN = skeleton(
+        PoseIdx.NOSE to pp(0.12f, -1.38f, 0.5f),
+        PoseIdx.EAR_L to pp(0.02f, -1.38f, 0.3f),
+        PoseIdx.EAR_R to pp(0.18f, -1.36f, 0.3f),
+        PoseIdx.SHOULDER_L to pp(-0.22f, -1.0f),
+        PoseIdx.SHOULDER_R to pp(0.14f, -0.96f),
+        PoseIdx.ELBOW_L to pp(-0.06f, -0.64f),
+        PoseIdx.WRIST_L to pp(0.10f, -0.56f),
+        PoseIdx.ELBOW_R to pp(0.16f, -0.60f),
+        PoseIdx.WRIST_R to pp(-0.02f, -0.54f),
+        PoseIdx.HIP_L to pp(-0.16f, 0f),
+        PoseIdx.HIP_R to pp(0.14f, 0f),
+        PoseIdx.KNEE_L to pp(0.30f, 0.06f),
+        PoseIdx.KNEE_R to pp(0.24f, 0.92f),
+        PoseIdx.ANKLE_L to pp(0.34f, 0.76f),
+        PoseIdx.ANKLE_R to pp(0.20f, 1.86f),
+        PoseIdx.TOE_L to pp(0.38f, 0.84f, 0.5f),
+        PoseIdx.TOE_R to pp(0.24f, 1.94f, 0.5f),
+    )
+
+    /** 窗边侧脸：侧身对窗，一臂自然垂、一臂前伸 */
+    private val SK_WINDOW_PROFILE = skeleton(
+        PoseIdx.NOSE to pp(0.10f, -1.40f, 0.5f),
+        PoseIdx.EAR_L to pp(0.02f, -1.40f, 0.3f),
+        PoseIdx.EAR_R to pp(0.16f, -1.38f, 0.3f),
+        PoseIdx.SHOULDER_L to pp(-0.12f, -1.0f),
+        PoseIdx.SHOULDER_R to pp(0.10f, -0.98f),
+        PoseIdx.ELBOW_L to pp(-0.20f, -0.50f),
+        PoseIdx.WRIST_L to pp(-0.14f, -0.02f),
+        PoseIdx.ELBOW_R to pp(0.14f, -0.52f),
+        PoseIdx.WRIST_R to pp(0.30f, -0.40f),
+        PoseIdx.HIP_L to pp(-0.08f, 0f),
+        PoseIdx.HIP_R to pp(0.08f, 0f),
+        PoseIdx.KNEE_L to pp(-0.08f, 1.0f),
+        PoseIdx.KNEE_R to pp(0.08f, 1.0f),
+        PoseIdx.ANKLE_L to pp(-0.10f, 1.92f),
+        PoseIdx.ANKLE_R to pp(0.10f, 1.92f),
+        PoseIdx.TOE_L to pp(-0.12f, 2.0f, 0.5f),
+        PoseIdx.TOE_R to pp(0.12f, 2.0f, 0.5f),
+    )
+
+    /** 天空仰拍：站姿，双臂自然下垂（镜头低位仰拍） */
+    private val SK_SKY_LOW = skeleton(
+        PoseIdx.NOSE to pp(0f, -1.42f, 0.5f),
+        PoseIdx.EAR_L to pp(-0.15f, -1.40f, 0.3f),
+        PoseIdx.EAR_R to pp(0.15f, -1.40f, 0.3f),
+        PoseIdx.SHOULDER_L to pp(-0.30f, -1.0f),
+        PoseIdx.SHOULDER_R to pp(0.30f, -1.0f),
+        PoseIdx.ELBOW_L to pp(-0.36f, -0.48f),
+        PoseIdx.ELBOW_R to pp(0.36f, -0.48f),
+        PoseIdx.WRIST_L to pp(-0.32f, 0.06f),
+        PoseIdx.WRIST_R to pp(0.32f, 0.06f),
+        PoseIdx.HIP_L to pp(-0.20f, 0f),
+        PoseIdx.HIP_R to pp(0.20f, 0f),
+        PoseIdx.KNEE_L to pp(-0.20f, 1.0f),
+        PoseIdx.KNEE_R to pp(0.24f, 0.96f),
+        PoseIdx.ANKLE_L to pp(-0.22f, 1.92f),
+        PoseIdx.ANKLE_R to pp(0.28f, 1.86f),
+        PoseIdx.TOE_L to pp(-0.24f, 2.0f, 0.5f),
+        PoseIdx.TOE_R to pp(0.34f, 1.94f, 0.5f),
+    )
+
+    /** 夜景人像：站姿，一手抬至脸侧（引导面光） */
+    private val SK_NIGHT_PORTRAIT = skeleton(
+        PoseIdx.NOSE to pp(0f, -1.42f, 0.5f),
+        PoseIdx.EAR_L to pp(-0.15f, -1.40f, 0.3f),
+        PoseIdx.EAR_R to pp(0.15f, -1.40f, 0.3f),
+        PoseIdx.SHOULDER_L to pp(-0.30f, -1.0f),
+        PoseIdx.SHOULDER_R to pp(0.30f, -1.0f),
+        PoseIdx.ELBOW_L to pp(-0.34f, -0.48f),
+        PoseIdx.WRIST_L to pp(-0.28f, -0.02f),
+        PoseIdx.ELBOW_R to pp(0.30f, -0.76f),
+        PoseIdx.WRIST_R to pp(0.14f, -1.06f),
+        PoseIdx.HIP_L to pp(-0.20f, 0f),
+        PoseIdx.HIP_R to pp(0.20f, 0f),
+        PoseIdx.KNEE_L to pp(-0.20f, 1.0f),
+        PoseIdx.KNEE_R to pp(0.22f, 0.98f),
+        PoseIdx.ANKLE_L to pp(-0.22f, 1.92f),
+        PoseIdx.ANKLE_R to pp(0.24f, 1.90f),
+        PoseIdx.TOE_L to pp(-0.24f, 2.0f, 0.5f),
+        PoseIdx.TOE_R to pp(0.26f, 1.98f, 0.5f),
+    )
+
+    /** 居家氛围感：蜷坐沙发，双膝屈起，手抱膝头 */
+    private val SK_HOME_COZY = skeleton(
+        PoseIdx.NOSE to pp(0f, -1.36f, 0.5f),
+        PoseIdx.EAR_L to pp(-0.15f, -1.34f, 0.3f),
+        PoseIdx.EAR_R to pp(0.15f, -1.34f, 0.3f),
+        PoseIdx.SHOULDER_L to pp(-0.28f, -0.96f),
+        PoseIdx.SHOULDER_R to pp(0.28f, -0.96f),
+        PoseIdx.ELBOW_L to pp(-0.34f, -0.46f),
+        PoseIdx.WRIST_L to pp(-0.20f, 0f),
+        PoseIdx.ELBOW_R to pp(0.32f, -0.48f),
+        PoseIdx.WRIST_R to pp(0.18f, 0.02f),
+        PoseIdx.HIP_L to pp(-0.16f, 0f),
+        PoseIdx.HIP_R to pp(0.16f, 0f),
+        PoseIdx.KNEE_L to pp(-0.30f, 0.24f),
+        PoseIdx.KNEE_R to pp(0.36f, 0.10f),
+        PoseIdx.ANKLE_L to pp(-0.16f, 0.62f),
+        PoseIdx.ANKLE_R to pp(0.26f, 0.70f),
+        PoseIdx.TOE_L to pp(-0.10f, 0.68f, 0.5f),
+        PoseIdx.TOE_R to pp(0.32f, 0.76f, 0.5f),
+    )
+
     // ---------------- 艺术线条画（0-100 视框 SVG path，手工设计） ----------------
 
     /** 站姿显腿长：丸子头 + 收腰 + 一手叉腰 + 长腿 */
@@ -269,7 +416,7 @@ object PoseTemplates {
             ),
             zoom = 1f, pitch = CameraPitch.LEVEL,
             subjectArea = RectF(0.30f, 0.20f, 0.70f, 0.96f),
-            filterId = "teal_orange",
+            filterId = "teal_orange", skeleton = SK_SUNSET_SILHOUETTE,
             artPath = ART_SUNSET,
         ),
         PoseTemplate(
@@ -282,7 +429,7 @@ object PoseTemplates {
             ),
             zoom = 1f, pitch = CameraPitch.DOWN,
             subjectArea = RectF(0.10f, 0.10f, 0.90f, 0.90f),
-            filterId = "jp_clean",
+            filterId = "jp_clean", skeleton = SK_GRASS_TOPDOWN,
         ),
         PoseTemplate(
             id = "wall_half", name = "倚墙半身", category = PoseCategory.STREET,
@@ -294,7 +441,7 @@ object PoseTemplates {
             ),
             zoom = 2f, pitch = CameraPitch.LEVEL,
             subjectArea = RectF(0.25f, 0.10f, 0.75f, 0.75f),
-            filterId = "trix400",
+            filterId = "trix400", skeleton = SK_WALL_LEAN,
             artPath = ART_WALL,
         ),
         PoseTemplate(
@@ -307,7 +454,7 @@ object PoseTemplates {
             ),
             zoom = 2f, pitch = CameraPitch.LEVEL,
             subjectArea = RectF(0.30f, 0.10f, 0.90f, 0.70f),
-            filterId = "pro400h",
+            filterId = "pro400h", skeleton = SK_WINDOW_PROFILE,
         ),
         PoseTemplate(
             id = "street_crouch", name = "蹲姿街拍", category = PoseCategory.STREET,
@@ -332,7 +479,7 @@ object PoseTemplates {
             ),
             zoom = 0.6f, pitch = CameraPitch.UP,
             subjectArea = RectF(0.25f, 0.35f, 0.75f, 0.98f),
-            filterId = "ektar100",
+            filterId = "ektar100", skeleton = SK_SKY_LOW,
         ),
         PoseTemplate(
             id = "walking", name = "走路抓拍", category = PoseCategory.STREET,
@@ -357,7 +504,7 @@ object PoseTemplates {
             ),
             zoom = 1f, pitch = CameraPitch.LEVEL,
             subjectArea = RectF(0.20f, 0.10f, 0.80f, 0.90f),
-            filterId = "cinestill800t",
+            filterId = "cinestill800t", skeleton = SK_NIGHT_PORTRAIT,
         ),
         PoseTemplate(
             id = "seaside_back", name = "海边背影", category = PoseCategory.OUTDOOR,
@@ -407,7 +554,7 @@ object PoseTemplates {
             ),
             zoom = 2f, pitch = CameraPitch.ANY,
             subjectArea = RectF(0.20f, 0.15f, 0.90f, 0.92f),
-            filterId = "ccd_ixus",
+            filterId = "ccd_ixus", skeleton = SK_HOME_COZY,
             anchorLabel = "couch", anchorAlign = AnchorAlign.LEAN_ON,
         ),
     )

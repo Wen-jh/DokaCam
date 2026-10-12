@@ -16,8 +16,10 @@ import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.util.lerp
 import com.dokacam.camera.data.model.POSE_BONES
 import com.dokacam.camera.data.model.PoseIdx
+import com.dokacam.camera.data.model.PosePoint
 import kotlin.math.min
 import kotlin.math.sqrt
 
@@ -105,6 +107,23 @@ fun PoseArtCanvas(
     }
 }
 
+/** 模板卡片示例图：由 33 点骨架自动渲染的时装速写轮廓（无手绘 SVG 时兜底） */
+@Composable
+fun SkeletonArtCanvas(
+    skeleton: List<PosePoint>,
+    color: Color,
+    modifier: Modifier = Modifier,
+) {
+    Canvas(modifier) {
+        val pad = size.minDimension * 0.07f
+        drawSkeletonFigure(
+            skeleton,
+            Rect(pad, pad, size.width - pad, size.height - pad),
+            color,
+        )
+    }
+}
+
 // ------------------------------------------------------------------
 // 实时检测姿态：圆头骨骼线（按肢体段着色：匹配好绿 / 偏差大红）
 
@@ -150,6 +169,101 @@ fun DrawScope.drawPoseBones(
         drawCircle(segColor(PoseIdx.NOSE, PoseIdx.EAR_R), radius = headR, center = headC,
             style = Stroke(width = strokePx))
     }
+}
+
+// ------------------------------------------------------------------
+// 骨架自动渲染「时装速写」轮廓：圆头 + 收腰躯干 + 圆头四肢（上粗下细）。
+// 与手绘 SVG 线条画风格统一；无 artPath 的模板用它兜底出示例图，
+// 也作为实时参考（guide overlay）的第二优先渲染源。按骨架包围盒等比放进 [dst]。
+
+fun DrawScope.drawSkeletonFigure(
+    skeleton: List<PosePoint>,
+    dst: Rect,
+    color: Color,
+    alignBottom: Boolean = false,
+) {
+    if (dst.width <= 0f || dst.height <= 0f) return
+    var minX = Float.MAX_VALUE; var maxX = -Float.MAX_VALUE
+    var minY = Float.MAX_VALUE; var maxY = -Float.MAX_VALUE
+    for (p in skeleton) {
+        if (p.weight <= 0f) continue
+        if (p.x < minX) minX = p.x
+        if (p.x > maxX) maxX = p.x
+        if (p.y < minY) minY = p.y
+        if (p.y > maxY) maxY = p.y
+    }
+    if (minX > maxX || minY > maxY) return
+    val w0 = (maxX - minX).coerceAtLeast(0.01f)
+    val h0 = (maxY - minY).coerceAtLeast(0.01f)
+    // 留 8% 边距（头圆可能略超出包围盒顶部）
+    val s = min(dst.width / w0, dst.height / h0) * 0.92f
+    val ox = dst.left + (dst.width - w0 * s) / 2f - minX * s
+    val oy = if (alignBottom) dst.bottom - h0 * s - minY * s
+             else dst.top + (dst.height - h0 * s) / 2f - minY * s
+
+    fun X(x: Float) = x * s + ox
+    fun Y(y: Float) = y * s + oy
+    fun pt(i: Int): Offset? {
+        val p = skeleton.getOrNull(i) ?: return null
+        return if (p.weight > 0f) Offset(X(p.x), Y(p.y)) else null
+    }
+
+    val lineStyle = { w: Float -> Stroke(width = w, cap = StrokeCap.Round, join = StrokeJoin.Round) }
+
+    // 1) 收腰躯干：肩→腰(收窄)→髋 的闭合六边形，勾勒女性身段
+    val sL = pt(PoseIdx.SHOULDER_L); val sR = pt(PoseIdx.SHOULDER_R)
+    val hL = pt(PoseIdx.HIP_L); val hR = pt(PoseIdx.HIP_R)
+    if (sL != null && sR != null && hL != null && hR != null) {
+        val t = 0.42f
+        val waistMidX = lerp((sL.x + sR.x) / 2f, (hL.x + hR.x) / 2f, t)
+        val shoulderW = (sR.x - sL.x).coerceAtLeast(0.01f)
+        val hipW = (hR.x - hL.x).coerceAtLeast(0.01f)
+        val waistHalf = min(shoulderW, hipW) * 0.32f
+        val waistY = lerp(sL.y, hL.y, t)
+        val torso = Path().apply {
+            moveTo(sL.x, sL.y)
+            lineTo(waistMidX - waistHalf, waistY)
+            lineTo(hL.x, hL.y)
+            lineTo(hR.x, hR.y)
+            lineTo(waistMidX + waistHalf, waistY)
+            lineTo(sR.x, sR.y)
+            close()
+        }
+        drawPath(torso, color, style = lineStyle(s * 0.055f))
+    }
+
+    // 2) 头：鼻/耳中点为心的圆
+    val nose = pt(PoseIdx.NOSE)
+    val earL = pt(PoseIdx.EAR_L); val earR = pt(PoseIdx.EAR_R)
+    val headC = when {
+        earL != null && earR != null -> Offset((earL.x + earR.x) / 2f, (earL.y + earR.y) / 2f)
+        else -> nose
+    }
+    if (headC != null) {
+        drawCircle(color, radius = s * 0.16f, center = headC, style = lineStyle(s * 0.045f))
+    }
+
+    // 3) 四肢：上臂/大腿略粗，前臂/小腿略细，圆头收口
+    val armW = s * 0.052f
+    val foreW = s * 0.036f
+    val thighW = s * 0.056f
+    val shinW = s * 0.038f
+    val footW = s * 0.028f
+    fun limb(a: Int, b: Int, w: Float) {
+        val pa = pt(a) ?: return
+        val pb = pt(b) ?: return
+        drawLine(color, pa, pb, strokeWidth = w, cap = StrokeCap.Round)
+    }
+    limb(PoseIdx.SHOULDER_L, PoseIdx.ELBOW_L, armW)
+    limb(PoseIdx.ELBOW_L, PoseIdx.WRIST_L, foreW)
+    limb(PoseIdx.SHOULDER_R, PoseIdx.ELBOW_R, armW)
+    limb(PoseIdx.ELBOW_R, PoseIdx.WRIST_R, foreW)
+    limb(PoseIdx.HIP_L, PoseIdx.KNEE_L, thighW)
+    limb(PoseIdx.KNEE_L, PoseIdx.ANKLE_L, shinW)
+    limb(PoseIdx.HIP_R, PoseIdx.KNEE_R, thighW)
+    limb(PoseIdx.KNEE_R, PoseIdx.ANKLE_R, shinW)
+    limb(PoseIdx.ANKLE_L, PoseIdx.TOE_L, footW)
+    limb(PoseIdx.ANKLE_R, PoseIdx.TOE_R, footW)
 }
 
 private fun dist(a: Offset, b: Offset): Float {
