@@ -18,7 +18,6 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.dokacam.camera.data.model.POSE_BONES
 import com.dokacam.camera.data.model.PoseIdx
-import com.dokacam.camera.data.model.PosePoint
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sqrt
