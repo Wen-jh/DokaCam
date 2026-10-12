@@ -43,7 +43,7 @@ class PoseMatcher(private val template: PoseTemplate) {
     fun noDetection(): MatchResult {
         scoreWindow.clear()
         readySinceMs = 0L
-        return MatchResult(0, 0, detected = false, guidance = "未检测到人物，请站入取景框", ready = false)
+        return MatchResult(0, 0, detected = false, guidance = "站进画面里试试～", ready = false)
     }
 
     /** 喂入一帧姿态（仅模板模式由 ShotCoach 产出），返回平滑后的匹配结果 */
@@ -51,7 +51,7 @@ class PoseMatcher(private val template: PoseTemplate) {
         val skeleton = template.skeleton
             ?: return MatchResult(0, 0, detected = true, guidance = null, ready = false)
         val pts = normalize(pose, mirrored)
-            ?: return MatchResult(0, 0, detected = true, guidance = "站远一点，让全身入镜", ready = false)
+            ?: return MatchResult(0, 0, detected = true, guidance = "再退后一点试试", ready = false)
 
         // ---- 关键点位移分 ----
         var errSum = 0f
@@ -80,7 +80,7 @@ class PoseMatcher(private val template: PoseTemplate) {
             }
         }
         if (used < 6) {
-            return MatchResult(0, 0, detected = true, guidance = "站远一点，让全身入镜", ready = false)
+            return MatchResult(0, 0, detected = true, guidance = "再退后一点试试", ready = false)
         }
         val meanErr = errSum / wSum
         var posScore = (100f * (1f - meanErr / 0.7f)).coerceIn(0f, 100f)
@@ -123,10 +123,10 @@ class PoseMatcher(private val template: PoseTemplate) {
         val ready = readySinceMs > 0L && nowMs - readySinceMs >= 1000L
 
         val guidance = when {
-            ready -> "✓ 完美！可以拍了"
+            ready -> "✓ 完美！保持住～"
             worstIdx >= 0 && worstErr > 0.18f -> guidanceFor(worstIdx, worstDx, worstDy)
-            score >= 70 -> "姿势很接近了，保持微调"
-            else -> "对照金色剪影调整姿势"
+            score >= 70 -> "差一点点～"
+            else -> "跟着剪影摆一摆"
         }
         return MatchResult(score, raw, detected = true, guidance = guidance, ready = ready, jointErrors = jointErrors)
     }
@@ -167,13 +167,13 @@ class PoseMatcher(private val template: PoseTemplate) {
         return abs(atan2(v1.x * v2.y - v1.y * v2.x, v1.x * v2.x + v1.y * v2.y))
     }
 
-    /** 偏差最大关节 → 可执行引导文案（y 向下：dy>0 = 手比模板低 → 抬高） */
+    /** 偏差最大关节 → 可执行引导文案（y 向下：dy>0 = 手比模板低 → 抬高）。正向短句：关节名 + ≤4 字动作 */
     private fun guidanceFor(idx: Int, dx: Float, dy: Float): String {
         val name = JOINT_NAMES[idx] ?: "身体"
         val dir = if (abs(dy) >= abs(dx)) {
-            if (dy > 0) "抬高一点" else "放低一点"
+            if (dy > 0) "再抬点" else "再低点"
         } else {
-            if (dx > 0) "往左收一点" else "往右移一点"
+            if (dx > 0) "往左收点" else "往右移点"
         }
         return name + dir
     }

@@ -36,6 +36,8 @@ data class PosePoint(val x: Float, val y: Float, val weight: Float = 1f)
  * @param frontCamera 模板要求前置镜头（对镜自拍等）
  * @param exposureEv  推荐 EV 补偿（0 = 不动；大头/半身小正补偿提亮肤色）
  * @param artPath     艺术线条画（SVG path，M/L/C/Q/Z 绝对坐标，0-100 视框）；每个模板必填
+ * @param group       面板分组标题（人数·场景，如 "单人·街拍"；双人模板将来归入 "双人"）
+ * @param moodTip     情绪引导一句话（角落参考卡展示，帮助表情管理）
  */
 data class PoseTemplate(
     val id: String,
@@ -50,6 +52,8 @@ data class PoseTemplate(
     val frontCamera: Boolean = false,
     val exposureEv: Float = 0f,
     val artPath: String,
+    val group: String = "单人",
+    val moodTip: String = "",
 )
 
 /** BlazePose 33 点索引常量（奇数=左，偶数=右，以被摄者自身为准） */

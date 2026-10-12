@@ -87,4 +87,6 @@ data class CameraSettings(
     val ccdModeEnabled: Boolean = false,
     val selectedPresetId: String = "none",
     val filterIntensity: Float = 1f,
+    val poseVoiceGuide: Boolean = true,
+    val poseGuideAlpha: Float = 0.8f,
 )

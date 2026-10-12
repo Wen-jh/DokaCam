@@ -50,6 +50,8 @@ class SettingsRepository(private val context: Context) {
         val ccdMode = booleanPreferencesKey("ccd_mode")
         val presetId = stringPreferencesKey("selected_preset")
         val filterIntensity = floatPreferencesKey("filter_intensity")
+        val poseVoiceGuide = booleanPreferencesKey("pose_voice_guide")
+        val poseGuideAlpha = floatPreferencesKey("pose_guide_alpha")
     }
 
     val settings: Flow<CameraSettings> = context.dataStore.data.map { p ->
@@ -77,6 +79,8 @@ class SettingsRepository(private val context: Context) {
             ccdModeEnabled = p[Keys.ccdMode] ?: false,
             selectedPresetId = p[Keys.presetId] ?: "none",
             filterIntensity = p[Keys.filterIntensity] ?: 1f,
+            poseVoiceGuide = p[Keys.poseVoiceGuide] ?: true,
+            poseGuideAlpha = (p[Keys.poseGuideAlpha] ?: 0.8f).coerceIn(0.2f, 1f),
         )
     }
 
@@ -105,6 +109,8 @@ class SettingsRepository(private val context: Context) {
     suspend fun setCcdMode(v: Boolean) = context.dataStore.edit { it[Keys.ccdMode] = v }
     suspend fun setSelectedPreset(v: String) = context.dataStore.edit { it[Keys.presetId] = v }
     suspend fun setFilterIntensity(v: Float) = context.dataStore.edit { it[Keys.filterIntensity] = v }
+    suspend fun setPoseVoiceGuide(v: Boolean) = context.dataStore.edit { it[Keys.poseVoiceGuide] = v }
+    suspend fun setPoseGuideAlpha(v: Float) = context.dataStore.edit { it[Keys.poseGuideAlpha] = v.coerceIn(0.2f, 1f) }
 
     suspend fun clearAll() = context.dataStore.edit { it.clear() }
 }

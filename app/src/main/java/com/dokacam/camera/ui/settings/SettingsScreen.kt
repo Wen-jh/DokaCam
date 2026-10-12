@@ -119,6 +119,10 @@ fun SettingsScreen(onBack: () -> Unit) {
                 "AI 滤镜推荐", "根据场景与光线自动推荐滤镜",
                 s.aiFilterRecommendEnabled, vm::setAiRecommend,
             )
+            ToggleRow(
+                "语音引导", "姿势模板下朗读动作引导，被拍的人也能听到",
+                s.poseVoiceGuide, vm::setPoseVoiceGuide,
+            )
             ToggleRow("人像美颜", "磨皮 + 肤色提亮（保留质感）", s.beautyEnabled, vm::setBeauty)
             if (s.beautyEnabled) {
                 SliderRow(

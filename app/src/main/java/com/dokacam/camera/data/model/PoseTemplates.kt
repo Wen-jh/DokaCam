@@ -145,6 +145,7 @@ object PoseTemplates {
             subjectArea = RectF(0.28f, 0.12f, 0.72f, 0.52f),
             filterId = "ccd_casio", exposureEv = 0.5f,
             artPath = PoseArt.HEAD_CHIN,
+            group = "单人·特写", moodTip = "想着开心的事，眼神变软",
         ),
         PoseTemplate(
             id = "head_side", name = "侧脸杀", category = PoseCategory.HEAD,
@@ -158,6 +159,7 @@ object PoseTemplates {
             subjectArea = RectF(0.46f, 0.12f, 0.78f, 0.52f),
             filterId = "pro400h", exposureEv = 0.5f,
             artPath = PoseArt.HEAD_SIDE,
+            group = "单人·特写", moodTip = "眼神看远处，像在等风来",
         ),
         PoseTemplate(
             id = "head_peek", name = "半遮脸", category = PoseCategory.HEAD,
@@ -171,6 +173,7 @@ object PoseTemplates {
             subjectArea = RectF(0.26f, 0.14f, 0.58f, 0.52f),
             filterId = "ccd_ixus", exposureEv = 0.5f,
             artPath = PoseArt.HEAD_PEEK,
+            group = "单人·特写", moodTip = "想象看到好笑的事，眼睛笑弯",
         ),
         PoseTemplate(
             id = "head_hair", name = "撩发", category = PoseCategory.HEAD,
@@ -184,6 +187,7 @@ object PoseTemplates {
             subjectArea = RectF(0.44f, 0.12f, 0.76f, 0.54f),
             filterId = "gold200", exposureEv = 0.5f,
             artPath = PoseArt.HEAD_HAIR,
+            group = "单人·特写", moodTip = "想象微风刚好吹过发梢",
         ),
         PoseTemplate(
             id = "head_top", name = "高颅顶", category = PoseCategory.HEAD,
@@ -197,6 +201,7 @@ object PoseTemplates {
             subjectArea = RectF(0.30f, 0.08f, 0.70f, 0.48f),
             filterId = "portra400", exposureEv = 0.5f,
             artPath = PoseArt.HEAD_TOP,
+            group = "单人·特写", moodTip = "下巴微收，眼神笃定一点",
         ),
         PoseTemplate(
             id = "head_pout", name = "松弛感", category = PoseCategory.HEAD,
@@ -210,6 +215,7 @@ object PoseTemplates {
             subjectArea = RectF(0.30f, 0.14f, 0.70f, 0.54f),
             filterId = "ccd_casio", exposureEv = 0.5f,
             artPath = PoseArt.HEAD_POUT,
+            group = "单人·特写", moodTip = "什么都不想，彻底放空",
         ),
 
         // ===== 半身照：纯背景 + 上半身手势 =====
@@ -225,6 +231,7 @@ object PoseTemplates {
             subjectArea = RectF(0.10f, 0.10f, 0.58f, 0.68f),
             filterId = "superia400", exposureEv = 0.33f,
             artPath = PoseArt.HALF_LOOKBACK,
+            group = "单人·街拍", moodTip = "像听到有人喊你名字",
         ),
         PoseTemplate(
             id = "half_collarbone", name = "锁骨手", category = PoseCategory.HALF,
@@ -238,6 +245,7 @@ object PoseTemplates {
             subjectArea = RectF(0.40f, 0.10f, 0.80f, 0.66f),
             filterId = "gold200", exposureEv = 0.33f,
             artPath = PoseArt.HALF_COLLAR,
+            group = "单人·街拍", moodTip = "想象刚听到一句夸奖",
         ),
         PoseTemplate(
             id = "half_crossarm", name = "抱臂", category = PoseCategory.HALF,
@@ -251,6 +259,7 @@ object PoseTemplates {
             subjectArea = RectF(0.28f, 0.10f, 0.72f, 0.66f),
             filterId = "superia400", exposureEv = 0.33f,
             artPath = PoseArt.HALF_CROSSARM,
+            group = "单人·街拍", moodTip = "心里默念：我最酷",
         ),
         PoseTemplate(
             id = "half_prop", name = "拿道具", category = PoseCategory.HALF,
@@ -264,6 +273,7 @@ object PoseTemplates {
             subjectArea = RectF(0.24f, 0.10f, 0.64f, 0.66f),
             filterId = "jp_clean", exposureEv = 0.33f,
             artPath = PoseArt.HALF_PROP,
+            group = "单人·街拍", moodTip = "想象在喝第一口冰美式",
         ),
 
         // ===== 全身照：对镜/靠墙/空地即可，保留骨架匹配 =====
@@ -279,6 +289,7 @@ object PoseTemplates {
             subjectArea = RectF(0.22f, 0.04f, 0.78f, 0.96f),
             filterId = "portra400", skeleton = SK_S_LINE,
             artPath = PoseArt.STAND,
+            group = "单人·街拍", moodTip = "肩膀打开，气场拿出来",
         ),
         PoseTemplate(
             id = "full_crossleg", name = "交叉腿", category = PoseCategory.FULL,
@@ -292,6 +303,7 @@ object PoseTemplates {
             subjectArea = RectF(0.22f, 0.04f, 0.78f, 0.96f),
             filterId = "agfavista", skeleton = SK_CROSSED,
             artPath = PoseArt.FULL_CROSSLEG,
+            group = "单人·街拍", moodTip = "想象刚被街拍师拦下",
         ),
         PoseTemplate(
             id = "full_walking", name = "走路抓拍", category = PoseCategory.FULL,
@@ -305,6 +317,7 @@ object PoseTemplates {
             subjectArea = RectF(0.25f, 0.08f, 0.75f, 0.96f),
             filterId = "kodachrome", skeleton = SK_WALKING,
             artPath = PoseArt.WALKING,
+            group = "单人·街拍", moodTip = "哼着歌往前走，别管镜头",
         ),
         PoseTemplate(
             id = "full_wall", name = "靠墙插兜", category = PoseCategory.FULL,
@@ -318,6 +331,7 @@ object PoseTemplates {
             subjectArea = RectF(0.24f, 0.08f, 0.76f, 0.94f),
             filterId = "trix400", skeleton = SK_WALL_LEAN,
             artPath = PoseArt.WALL,
+            group = "单人·街拍", moodTip = "想象在等一个老朋友",
         ),
         PoseTemplate(
             id = "full_mirror", name = "对镜自拍", category = PoseCategory.FULL,
@@ -332,6 +346,7 @@ object PoseTemplates {
             filterId = "ccd_casio", skeleton = SK_MIRROR_SELFIE,
             frontCamera = true,
             artPath = PoseArt.SELFIE,
+            group = "单人·对镜", moodTip = "对镜子里的自己眨个眼",
         ),
     )
 

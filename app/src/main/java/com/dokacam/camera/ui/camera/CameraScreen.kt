@@ -14,6 +14,9 @@ import android.hardware.SensorManager
 import android.net.Uri
 import android.os.Build
 import android.os.SystemClock
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import android.util.Log
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -21,7 +24,9 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.ImageCapture
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -51,6 +56,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -84,6 +90,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.graphics.drawscope.withTransform
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
@@ -101,6 +109,7 @@ import com.dokacam.camera.ai.HintStabilizer
 import com.dokacam.camera.ai.PoseFrame
 import com.dokacam.camera.ai.PoseMatcher
 import com.dokacam.camera.ai.PoseRecommender
+import com.dokacam.camera.ai.PoseVoiceGuide
 import com.dokacam.camera.ai.SelfieFaceInfo
 import com.dokacam.camera.ai.SelfieGuide
 import com.dokacam.camera.ai.SelfieHint
@@ -291,6 +300,14 @@ fun CameraScreen(
     // 姿势到位自动拍摄（P0-c）：ready → 3-2-1 倒计时 → 自动快门
     var poseAutoCapture by remember { mutableStateOf(true) }
     var poseCountdown by remember { mutableStateOf(0) }
+    // 匹配到位庆祝：ready 上升沿 +1，驱动轮廓/参考卡的金色绽放动效（>0 的初始值不会触发动画）
+    var celebrateTick by remember { mutableStateOf(0) }
+    // 轮廓透明度：本地滑杆值，松手才写回 DataStore（与滤镜强度同一模式）
+    var guideAlpha by remember { mutableStateOf(settings.poseGuideAlpha) }
+    LaunchedEffect(settings.poseGuideAlpha) { guideAlpha = settings.poseGuideAlpha }
+    // 被拍者语音播报（系统 TTS，初始化失败静默降级）
+    val voice = remember { PoseVoiceGuide(context) }
+    DisposableEffect(Unit) { onDispose { voice.shutdown() } }
 
     // ---- 自拍引导：大头/半身模板不做骨架匹配，用主脸大小/位置给「闺蜜式」提示 ----
     var selfieHint by remember { mutableStateOf<String?>(null) }
@@ -346,6 +363,7 @@ fun CameraScreen(
         posePrevZoom = null
         activeTemplateId = null
         poseMatch = null
+        celebrateTick = 0
     }
 
     fun applyPoseTemplate(t: PoseTemplate) {
@@ -359,6 +377,7 @@ fun CameraScreen(
         activeTemplateId = t.id
         poseMatch = null
         selfieHint = null
+        celebrateTick = 0
         // 大头/半身走脸部轻量引导，只有全身（带骨架）模板跑骨架匹配
         coach.poseModeEnabled = t.skeleton != null
         if (!aiOn.value) aiOn.value = true // 模板依赖分析帧，强制开 AI 管线
@@ -561,6 +580,45 @@ fun CameraScreen(
             }
     }
 
+    // 匹配到位庆祝：ready 上升沿触发一次（震动 + 绽放动效 + 语音确认）；
+    // 迟滞重新武装：分数掉到 75 以下才允许下一次，避免在 ready 阈值附近连续震
+    LaunchedEffect(activeTemplateId) {
+        if (activeTemplateId == null) return@LaunchedEffect
+        var armed = true
+        snapshotFlow { poseMatch }.collect { m ->
+            if (m == null || !m.detected || m.score < 75) armed = true
+            if (m != null && m.ready && armed) {
+                armed = false
+                celebrateTick++
+                vibrateOnce(context)
+                if (settings.poseVoiceGuide) voice.speak("完美，保持", force = true)
+                Log.i(PoseVoiceGuide.TAG, "celebrate: score=${m.score}")
+            }
+        }
+    }
+
+    // 语音引导播报：机位提示 > 动作引导；文案变化才播（PoseVoiceGuide 内部去重 + 3s 节流），
+    // ready 时刻的「完美」由庆祝 effect 强制播报，这里跳过避免抢话
+    LaunchedEffect(activeTemplateId, settings.poseVoiceGuide) {
+        val id = activeTemplateId
+        if (id == null || !settings.poseVoiceGuide) return@LaunchedEffect
+        val t = PoseTemplates.byId.getValue(id)
+        snapshotFlow {
+            val pitch = pitchHintFor(t.pitch, pitchDeg)?.removePrefix("机位提示：")
+            val m = poseMatch
+            val guide = when {
+                t.skeleton != null -> if (m?.ready == true) null else m?.guidance?.removePrefix("✓ ")
+                else -> selfieHint
+            }
+            pitch to guide
+        }.collect { (pitch, guide) ->
+            when {
+                pitch != null -> voice.speak(pitch)
+                guide != null -> voice.speak(guide)
+            }
+        }
+    }
+
     var viewSize by remember { mutableStateOf(IntSize.Zero) }
     val advice by coach.advice.collectAsState()
     // 主脸视图空间信息：模板推荐按取景远近选（无脸 → 全身类推荐）
@@ -746,6 +804,19 @@ fun CameraScreen(
                 pose = advice.pose,
                 match = poseMatch,
                 glView = glView,
+                guideAlpha = guideAlpha,
+                celebrateTick = celebrateTick,
+            )
+        }
+
+        // 角落参考卡：左上（教练卡下方），模板剪影放大图 + 情绪提示，点击收起/展开
+        activeTemplateId?.let { id ->
+            PoseRefCard(
+                template = PoseTemplates.byId.getValue(id),
+                celebrateTick = celebrateTick,
+                modifier = Modifier.align(Alignment.TopStart)
+                    .statusBarsPadding()
+                    .padding(start = 12.dp, top = 226.dp),
             )
         }
 
@@ -896,6 +967,9 @@ fun CameraScreen(
                 selfieHint = selfieHint,
                 autoCapture = poseAutoCapture,
                 onToggleAutoCapture = { poseAutoCapture = !poseAutoCapture; poke() },
+                guideAlpha = guideAlpha,
+                onGuideAlpha = { guideAlpha = it },
+                onGuideAlphaFinished = { scope.launch { settingsRepo.setPoseGuideAlpha(guideAlpha) } },
                 modifier = Modifier.align(Alignment.TopCenter)
                     .statusBarsPadding()
                     .padding(top = 118.dp, start = 16.dp, end = 16.dp),
@@ -1445,9 +1519,11 @@ private suspend fun decodeThumb(context: Context, uri: Uri): Bitmap? = withConte
 /**
  * 姿势模板叠加层（极简时尚线条画风格）：
  *  - 金色四角括弧：模板的人物目标区域（subjectArea），轻盈不压画面
- *  - 金色线条画：模板 artPath（按内容包围盒适配，全身类底边对齐「站在地上」）
+ *  - 金色线条画：模板 artPath（按内容包围盒适配，全身类底边对齐「站在地上」），
+ *    透明度由设置 [guideAlpha]（0.2-1.0）控制
  *  - 青色骨骼线：仅全身类模板，PoseLandmarker 实时姿态（[CameraGlView.mapAnalysisPointToView]
  *    同源映射，前摄镜像已含），按肢体段着色：匹配好=绿，偏差大=红
+ *  - [celebrateTick] 递增时轮廓做一次弹性缩放 + 金色绽放（匹配到位庆祝）
  */
 @Composable
 private fun PoseGuideOverlay(
@@ -1455,10 +1531,23 @@ private fun PoseGuideOverlay(
     pose: PoseFrame?,
     match: PoseMatcher.MatchResult?,
     glView: CameraGlView,
+    guideAlpha: Float = 0.8f,
+    celebrateTick: Int = 0,
 ) {
     val gold = Color(0xFFF2C14E)
     val liveColor = Color(0xFF4DD0E1)
     val artPaths = remember(template.id) { parseArtPaths(template.artPath) }
+    // 庆祝脉冲：0→1 快起（180ms）→ 弹簧回落（约 400ms），驱动缩放与金色泛光
+    val pulse = remember { Animatable(0f) }
+    LaunchedEffect(celebrateTick) {
+        if (celebrateTick <= 0) return@LaunchedEffect
+        pulse.snapTo(0f)
+        pulse.animateTo(1f, tween(180))
+        pulse.animateTo(
+            0f,
+            spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
+        )
+    }
     Canvas(Modifier.fillMaxSize()) {
         val w = size.width
         val h = size.height
@@ -1476,13 +1565,30 @@ private fun PoseGuideOverlay(
         if (artPaths.isNotEmpty()) {
             val top = maxOf(area.top * h, 132.dp.toPx())
             val dst = Rect(area.left * w, top, area.right * w, area.bottom * h)
-            drawArtPaths(
-                artPaths, dst, gold.copy(alpha = 0.8f),
-                strokePx = 2.dp.toPx(),
-                alignBottom = template.category == PoseCategory.FULL,
-                fitContent = true,
-                fillAlpha = 0.35f,
-            )
+            val outline = gold.copy(alpha = 0.8f * guideAlpha)
+            val fill = 0.45f * guideAlpha
+            val p = pulse.value
+            val s = 1f + 0.12f * p
+            val pivot = dst.center
+            withTransform({ scale(s, s, pivot) }) {
+                drawArtPaths(
+                    artPaths, dst, outline,
+                    strokePx = 2.dp.toPx(),
+                    alignBottom = template.category == PoseCategory.FULL,
+                    fitContent = true,
+                    fillAlpha = fill,
+                )
+                // 绽放泛光：脉冲期间加一层更亮更宽的金色描边
+                if (p > 0.01f) {
+                    drawArtPaths(
+                        artPaths, dst, gold.copy(alpha = 0.55f * p),
+                        strokePx = 6.dp.toPx(),
+                        alignBottom = template.category == PoseCategory.FULL,
+                        fitContent = true,
+                        fillAlpha = 0.20f * p,
+                    )
+                }
+            }
         }
 
         // 实时检测骨骼线（仅全身类模板；分析帧归一化 → 视图坐标，与 AI 主体框同一映射）
@@ -1507,7 +1613,7 @@ private fun PoseGuideOverlay(
     }
 }
 
-/** 模板选择面板：推荐条 + 取景分类胶囊（大头/半身/全身）+ 横向模板卡片，首位为「无」退出卡 */
+/** 模板选择面板：推荐条 + 取景分类胶囊（大头/半身/全身）+ 按「人数·场景」分组的横向模板卡片，首位为「无」退出卡 */
 @Composable
 private fun PoseTemplatePanel(
     templates: List<PoseTemplate>,
@@ -1542,38 +1648,56 @@ private fun PoseTemplatePanel(
                 )
             }
         }
-        LazyRow(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            contentPadding = PaddingValues(horizontal = 12.dp),
-            modifier = Modifier
+        // 分组模板卡片：当前取景分类下按「人数·场景」分组（groupBy 保序），每组一个标题 + 一排卡片
+        val grouped = templates.filter { it.category == tab }.groupBy { it.group }
+        Column(
+            Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(16.dp))
                 .background(Color.Black.copy(alpha = 0.55f))
                 .padding(vertical = 10.dp),
         ) {
-            item(key = "none") {
-                PoseTemplateCard(
-                    name = "无",
-                    subtitle = "退出模板",
-                    artPath = "",
-                    placeholder = "",
-                    selected = selectedId == null,
-                    gold = gold,
-                ) { onSelect(null) }
-            }
-            items(templates.filter { it.category == tab }, key = { it.id }) { t ->
-                PoseTemplateCard(
-                    name = t.name,
-                    subtitle = buildString {
-                        append(t.pitch.label)
-                        t.zoom?.let { append(" · ").append(if (it == it.toInt().toFloat()) "${it.toInt()}x" else "${it}x") }
-                    },
-                    artPath = t.artPath,
-                    placeholder = "技巧引导",
-                    alignBottom = t.category == PoseCategory.FULL,
-                    selected = t.id == selectedId,
-                    gold = gold,
-                ) { onSelect(t.id) }
+            var firstGroup = true
+            grouped.forEach { (group, list) ->
+                Text(
+                    group,
+                    color = gold.copy(alpha = 0.8f),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 2.dp),
+                )
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp),
+                ) {
+                    if (firstGroup) {
+                        item(key = "none") {
+                            PoseTemplateCard(
+                                name = "无",
+                                subtitle = "退出模板",
+                                artPath = "",
+                                placeholder = "",
+                                selected = selectedId == null,
+                                gold = gold,
+                            ) { onSelect(null) }
+                        }
+                    }
+                    items(list, key = { it.id }) { t ->
+                        PoseTemplateCard(
+                            name = t.name,
+                            subtitle = buildString {
+                                append(t.pitch.label)
+                                t.zoom?.let { append(" · ").append(if (it == it.toInt().toFloat()) "${it.toInt()}x" else "${it}x") }
+                            },
+                            artPath = t.artPath,
+                            placeholder = "技巧引导",
+                            alignBottom = t.category == PoseCategory.FULL,
+                            selected = t.id == selectedId,
+                            gold = gold,
+                        ) { onSelect(t.id) }
+                    }
+                }
+                firstGroup = false
             }
         }
     }
@@ -1690,7 +1814,8 @@ private fun PoseTemplateCard(
 
 /**
  * 姿势教练卡：模板名 + tips 轮播（4s 一条）+ 匹配分数条（全身）/ 自拍引导（大头、半身）+ 机位俯仰提示。
- * 全身类匹配 ≥85 稳定约 1s 后亮「完美！可以拍了」（仅提示，不自动拍）。
+ * 全身类匹配 ≥85 稳定约 1s 后亮「完美！保持住～」。
+ * 「轮廓」按钮展开透明度滑杆（0.2-1.0，松手持久化到设置）。
  */
 @Composable
 private fun PoseCoachCard(
@@ -1700,10 +1825,14 @@ private fun PoseCoachCard(
     selfieHint: String? = null,
     autoCapture: Boolean = true,
     onToggleAutoCapture: () -> Unit = {},
+    guideAlpha: Float = 0.8f,
+    onGuideAlpha: (Float) -> Unit = {},
+    onGuideAlphaFinished: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val gold = Color(0xFFF2C14E)
     var tipIdx by remember(template.id) { mutableStateOf(0) }
+    var alphaOpen by remember(template.id) { mutableStateOf(false) }
     LaunchedEffect(template.id) {
         while (true) {
             delay(4000)
@@ -1747,7 +1876,22 @@ private fun PoseCoachCard(
                         .clickable { onToggleAutoCapture() }
                         .padding(horizontal = 8.dp, vertical = 3.dp),
                 )
+                Spacer(Modifier.size(6.dp))
+            } else {
+                Spacer(Modifier.weight(1f))
             }
+            // 轮廓透明度：展开滑杆调节模板轮廓深浅
+            Text(
+                "轮廓",
+                color = if (alphaOpen) gold else Color.White.copy(alpha = 0.55f),
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .background(if (alphaOpen) gold.copy(alpha = 0.18f) else Color.White.copy(alpha = 0.08f))
+                    .clickable { alphaOpen = !alphaOpen }
+                    .padding(horizontal = 8.dp, vertical = 3.dp),
+            )
             Spacer(Modifier.size(7.dp))
             Text(
                 "技巧 ${tipIdx + 1}/${template.tips.size}",
@@ -1806,6 +1950,106 @@ private fun PoseCoachCard(
             Spacer(Modifier.size(3.dp))
             Text(hint, color = Color(0xFFFFB74D), fontSize = 12.sp, maxLines = 1)
         }
+        if (alphaOpen) {
+            Spacer(Modifier.size(2.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("透明度", color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp)
+                Slider(
+                    value = guideAlpha,
+                    onValueChange = onGuideAlpha,
+                    onValueChangeFinished = onGuideAlphaFinished,
+                    valueRange = 0.2f..1f,
+                    modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+                )
+                Text("${(guideAlpha * 100).toInt()}%", color = gold, fontSize = 11.sp)
+            }
+        }
+    }
+}
+
+/**
+ * 角落参考卡（左上）：模板剪影放大图 + 一句情绪提示，帮助被拍者表情管理。
+ * 点击收起成小胶囊，再点展开；[celebrateTick] 递增时做一次弹性缩放 + 金边绽放。
+ */
+@Composable
+private fun PoseRefCard(
+    template: PoseTemplate,
+    celebrateTick: Int,
+    modifier: Modifier = Modifier,
+) {
+    val gold = Color(0xFFF2C14E)
+    var expanded by remember(template.id) { mutableStateOf(true) }
+    val pulse = remember { Animatable(0f) }
+    LaunchedEffect(celebrateTick) {
+        if (celebrateTick <= 0) return@LaunchedEffect
+        pulse.snapTo(0f)
+        pulse.animateTo(1f, tween(180))
+        pulse.animateTo(
+            0f,
+            spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
+        )
+    }
+    if (!expanded) {
+        Box(
+            modifier
+                .clip(RoundedCornerShape(50))
+                .background(Color.Black.copy(alpha = 0.5f))
+                .clickable { expanded = true }
+                .padding(horizontal = 10.dp, vertical = 5.dp),
+        ) {
+            Text("示例图", color = gold, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+        }
+        return
+    }
+    val p = pulse.value
+    Column(
+        modifier
+            .width(108.dp)
+            .graphicsLayer {
+                val s = 1f + 0.12f * p
+                scaleX = s
+                scaleY = s
+            }
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color.Black.copy(alpha = 0.55f))
+            .border(
+                1.dp,
+                gold.copy(alpha = 0.4f + 0.6f * p),
+                RoundedCornerShape(12.dp),
+            )
+            .clickable { expanded = false }
+            .padding(8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        PoseArtCanvas(
+            artPath = template.artPath,
+            color = gold,
+            modifier = Modifier.fillMaxWidth().height(96.dp),
+            alignBottom = template.category == PoseCategory.FULL,
+        )
+        if (template.moodTip.isNotEmpty()) {
+            Spacer(Modifier.height(5.dp))
+            Text(
+                template.moodTip,
+                color = Color.White.copy(alpha = 0.85f),
+                fontSize = 10.sp,
+                lineHeight = 13.sp,
+            )
+        }
+    }
+}
+
+/** 短震动反馈（匹配到位庆祝）；权限 VIBRATE 已在 Manifest 声明，异常静默 */
+private fun vibrateOnce(context: Context) {
+    runCatching {
+        val vibrator = if (Build.VERSION.SDK_INT >= 31) {
+            (context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager)
+                ?.defaultVibrator
+        } else {
+            @Suppress("DEPRECATION")
+            context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+        } ?: return
+        vibrator.vibrate(VibrationEffect.createOneShot(70, VibrationEffect.DEFAULT_AMPLITUDE))
     }
 }
 

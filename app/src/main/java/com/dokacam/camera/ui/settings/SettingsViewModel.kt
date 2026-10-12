@@ -35,6 +35,7 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     fun setAiRecommend(v: Boolean) = launch { repo.setAiRecommend(v) }
     fun setBeauty(v: Boolean) = launch { repo.setBeautyEnabled(v) }
     fun setBeautyIntensity(v: Float) = launch { repo.setBeautyIntensity(v) }
+    fun setPoseVoiceGuide(v: Boolean) = launch { repo.setPoseVoiceGuide(v) }
 
     private fun launch(block: suspend () -> Unit) {
         viewModelScope.launch { block() }
