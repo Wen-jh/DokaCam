@@ -64,6 +64,7 @@ fun SettingsScreen(onBack: () -> Unit) {
             ToggleRow("触屏拍摄", "点击取景器任意处即拍照", s.tapToCapture, vm::setTapToCapture)
             ToggleRow("水平仪", "取景时显示水平提示", s.levelEnabled, vm::setLevelEnabled)
             ToggleRow("前置镜像", "自拍预览与成片水平翻转", s.mirrorFrontCamera, vm::setMirrorFront)
+            ToggleRow("自拍自动 2x", "前置镜头检测到单人脸时自动放大到 2x，减少广角畸变", s.selfieAutoZoom, vm::setSelfieAutoZoom)
             // 网格类型（取景器构图线样式）
             ChoiceRow(
                 "网格类型",

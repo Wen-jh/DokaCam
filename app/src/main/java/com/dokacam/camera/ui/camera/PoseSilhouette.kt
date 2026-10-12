@@ -16,10 +16,10 @@ import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.util.lerp
 import com.dokacam.camera.data.model.POSE_BONES
 import com.dokacam.camera.data.model.PoseIdx
 import com.dokacam.camera.data.model.PosePoint
+import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sqrt
 
@@ -65,6 +65,7 @@ fun parseArtPaths(d: String): List<Path> {
 /**
  * 把 0-100 视框的艺术线条等比缩放画进 [dst]（像素矩形）。
  * 水平居中；[alignBottom] 时底边对齐（锚定坐姿/站姿「坐/站」在目标上），否则垂直居中。
+ * [fitContent] 时按线条实际包围盒（而非整个 0-100 视框）缩放适配，手绘内容更饱满；
  * [strokePx] 为最终像素线宽（不受缩放影响），圆头圆角。
  */
 fun DrawScope.drawArtPaths(
@@ -73,12 +74,34 @@ fun DrawScope.drawArtPaths(
     color: Color,
     strokePx: Float,
     alignBottom: Boolean = false,
+    fitContent: Boolean = false,
 ) {
     if (paths.isEmpty() || dst.width <= 0f || dst.height <= 0f) return
-    val s = min(dst.width, dst.height) / 100f
-    val dx = dst.left + (dst.width - 100f * s) / 2f
-    val dy = if (alignBottom) dst.top + dst.height - 100f * s
-             else dst.top + (dst.height - 100f * s) / 2f
+    val pad = if (fitContent) min(dst.width, dst.height) * 0.05f else 0f
+    val (s, dx, dy) = if (fitContent) {
+        var l = Float.MAX_VALUE; var t = Float.MAX_VALUE
+        var r = -Float.MAX_VALUE; var b = -Float.MAX_VALUE
+        for (p in paths) {
+            val bd = p.getBounds()
+            if (!bd.left.isFinite() || bd.right <= bd.left || bd.bottom <= bd.top) continue
+            l = min(l, bd.left); t = min(t, bd.top)
+            r = max(r, bd.right); b = max(b, bd.bottom)
+        }
+        // 无有效包围盒时退回整个视框
+        if (!l.isFinite() || r - l <= 0f || b - t <= 0f) { l = 0f; t = 0f; r = 100f; b = 100f }
+        val cw = r - l; val ch = b - t
+        val sc = min((dst.width - 2 * pad) / cw, (dst.height - 2 * pad) / ch)
+        val dx0 = dst.left + pad + (dst.width - 2 * pad - cw * sc) / 2f - l * sc
+        val dy0 = if (alignBottom) dst.bottom - pad - b * sc
+                  else dst.top + pad + (dst.height - 2 * pad - ch * sc) / 2f - t * sc
+        Triple(sc, dx0, dy0)
+    } else {
+        val s0 = min(dst.width, dst.height) / 100f
+        val dx0 = dst.left + (dst.width - 100f * s0) / 2f
+        val dy0 = if (alignBottom) dst.top + dst.height - 100f * s0
+                  else dst.top + (dst.height - 100f * s0) / 2f
+        Triple(s0, dx0, dy0)
+    }
     translate(dx, dy) {
         scale(s, s, Offset.Zero) {
             val style = Stroke(width = strokePx / s, cap = StrokeCap.Round, join = StrokeJoin.Round)
@@ -87,13 +110,14 @@ fun DrawScope.drawArtPaths(
     }
 }
 
-/** 模板卡片示例图：艺术线条等比居中，深色底由卡片提供 */
+/** 模板卡片示例图：艺术线条画（按内容包围盒适配，深色底由卡片提供） */
 @Composable
 fun PoseArtCanvas(
     artPath: String,
     color: Color,
     modifier: Modifier = Modifier,
     strokeWidth: Dp = 2.dp,
+    alignBottom: Boolean = false,
 ) {
     val paths = remember(artPath) { parseArtPaths(artPath) }
     Canvas(modifier) {
@@ -103,25 +127,33 @@ fun PoseArtCanvas(
             Rect(pad, pad, size.width - pad, size.height - pad),
             color,
             strokeWidth.toPx(),
+            alignBottom = alignBottom,
+            fitContent = true,
         )
     }
 }
 
-/** 模板卡片示例图：由 33 点骨架自动渲染的时装速写轮廓（无手绘 SVG 时兜底） */
-@Composable
-fun SkeletonArtCanvas(
-    skeleton: List<PosePoint>,
+/** 取景参考框：四角分离的细括弧（比整圈方框更轻盈），[gapPx] 为角部留白 */
+fun DrawScope.drawCornerBrackets(
+    rect: Rect,
     color: Color,
-    modifier: Modifier = Modifier,
+    lenPx: Float,
+    strokePx: Float,
+    gapPx: Float = 6f,
 ) {
-    Canvas(modifier) {
-        val pad = size.minDimension * 0.07f
-        drawSkeletonFigure(
-            skeleton,
-            Rect(pad, pad, size.width - pad, size.height - pad),
-            color,
-        )
-    }
+    val l = rect.left; val t = rect.top; val r = rect.right; val b = rect.bottom
+    // 每个角两条短臂：竖臂 + 横臂，角部断开留白
+    val arms = listOf(
+        Offset(l, t + gapPx) to Offset(l, t + lenPx),
+        Offset(l + gapPx, t) to Offset(l + lenPx, t),
+        Offset(r, t + gapPx) to Offset(r, t + lenPx),
+        Offset(r - gapPx, t) to Offset(r - lenPx, t),
+        Offset(r, b - gapPx) to Offset(r, b - lenPx),
+        Offset(r - gapPx, b) to Offset(r - lenPx, b),
+        Offset(l, b - gapPx) to Offset(l, b - lenPx),
+        Offset(l + gapPx, b) to Offset(l + lenPx, b),
+    )
+    for ((a, z) in arms) drawLine(color, a, z, strokeWidth = strokePx, cap = StrokeCap.Round)
 }
 
 // ------------------------------------------------------------------
@@ -169,101 +201,6 @@ fun DrawScope.drawPoseBones(
         drawCircle(segColor(PoseIdx.NOSE, PoseIdx.EAR_R), radius = headR, center = headC,
             style = Stroke(width = strokePx))
     }
-}
-
-// ------------------------------------------------------------------
-// 骨架自动渲染「时装速写」轮廓：圆头 + 收腰躯干 + 圆头四肢（上粗下细）。
-// 与手绘 SVG 线条画风格统一；无 artPath 的模板用它兜底出示例图，
-// 也作为实时参考（guide overlay）的第二优先渲染源。按骨架包围盒等比放进 [dst]。
-
-fun DrawScope.drawSkeletonFigure(
-    skeleton: List<PosePoint>,
-    dst: Rect,
-    color: Color,
-    alignBottom: Boolean = false,
-) {
-    if (dst.width <= 0f || dst.height <= 0f) return
-    var minX = Float.MAX_VALUE; var maxX = -Float.MAX_VALUE
-    var minY = Float.MAX_VALUE; var maxY = -Float.MAX_VALUE
-    for (p in skeleton) {
-        if (p.weight <= 0f) continue
-        if (p.x < minX) minX = p.x
-        if (p.x > maxX) maxX = p.x
-        if (p.y < minY) minY = p.y
-        if (p.y > maxY) maxY = p.y
-    }
-    if (minX > maxX || minY > maxY) return
-    val w0 = (maxX - minX).coerceAtLeast(0.01f)
-    val h0 = (maxY - minY).coerceAtLeast(0.01f)
-    // 留 8% 边距（头圆可能略超出包围盒顶部）
-    val s = min(dst.width / w0, dst.height / h0) * 0.92f
-    val ox = dst.left + (dst.width - w0 * s) / 2f - minX * s
-    val oy = if (alignBottom) dst.bottom - h0 * s - minY * s
-             else dst.top + (dst.height - h0 * s) / 2f - minY * s
-
-    fun X(x: Float) = x * s + ox
-    fun Y(y: Float) = y * s + oy
-    fun pt(i: Int): Offset? {
-        val p = skeleton.getOrNull(i) ?: return null
-        return if (p.weight > 0f) Offset(X(p.x), Y(p.y)) else null
-    }
-
-    val lineStyle = { w: Float -> Stroke(width = w, cap = StrokeCap.Round, join = StrokeJoin.Round) }
-
-    // 1) 收腰躯干：肩→腰(收窄)→髋 的闭合六边形，勾勒女性身段
-    val sL = pt(PoseIdx.SHOULDER_L); val sR = pt(PoseIdx.SHOULDER_R)
-    val hL = pt(PoseIdx.HIP_L); val hR = pt(PoseIdx.HIP_R)
-    if (sL != null && sR != null && hL != null && hR != null) {
-        val t = 0.42f
-        val waistMidX = lerp((sL.x + sR.x) / 2f, (hL.x + hR.x) / 2f, t)
-        val shoulderW = (sR.x - sL.x).coerceAtLeast(0.01f)
-        val hipW = (hR.x - hL.x).coerceAtLeast(0.01f)
-        val waistHalf = min(shoulderW, hipW) * 0.32f
-        val waistY = lerp(sL.y, hL.y, t)
-        val torso = Path().apply {
-            moveTo(sL.x, sL.y)
-            lineTo(waistMidX - waistHalf, waistY)
-            lineTo(hL.x, hL.y)
-            lineTo(hR.x, hR.y)
-            lineTo(waistMidX + waistHalf, waistY)
-            lineTo(sR.x, sR.y)
-            close()
-        }
-        drawPath(torso, color, style = lineStyle(s * 0.055f))
-    }
-
-    // 2) 头：鼻/耳中点为心的圆
-    val nose = pt(PoseIdx.NOSE)
-    val earL = pt(PoseIdx.EAR_L); val earR = pt(PoseIdx.EAR_R)
-    val headC = when {
-        earL != null && earR != null -> Offset((earL.x + earR.x) / 2f, (earL.y + earR.y) / 2f)
-        else -> nose
-    }
-    if (headC != null) {
-        drawCircle(color, radius = s * 0.16f, center = headC, style = lineStyle(s * 0.045f))
-    }
-
-    // 3) 四肢：上臂/大腿略粗，前臂/小腿略细，圆头收口
-    val armW = s * 0.052f
-    val foreW = s * 0.036f
-    val thighW = s * 0.056f
-    val shinW = s * 0.038f
-    val footW = s * 0.028f
-    fun limb(a: Int, b: Int, w: Float) {
-        val pa = pt(a) ?: return
-        val pb = pt(b) ?: return
-        drawLine(color, pa, pb, strokeWidth = w, cap = StrokeCap.Round)
-    }
-    limb(PoseIdx.SHOULDER_L, PoseIdx.ELBOW_L, armW)
-    limb(PoseIdx.ELBOW_L, PoseIdx.WRIST_L, foreW)
-    limb(PoseIdx.SHOULDER_R, PoseIdx.ELBOW_R, armW)
-    limb(PoseIdx.ELBOW_R, PoseIdx.WRIST_R, foreW)
-    limb(PoseIdx.HIP_L, PoseIdx.KNEE_L, thighW)
-    limb(PoseIdx.KNEE_L, PoseIdx.ANKLE_L, shinW)
-    limb(PoseIdx.HIP_R, PoseIdx.KNEE_R, thighW)
-    limb(PoseIdx.KNEE_R, PoseIdx.ANKLE_R, shinW)
-    limb(PoseIdx.ANKLE_L, PoseIdx.TOE_L, footW)
-    limb(PoseIdx.ANKLE_R, PoseIdx.TOE_R, footW)
 }
 
 private fun dist(a: Offset, b: Offset): Float {

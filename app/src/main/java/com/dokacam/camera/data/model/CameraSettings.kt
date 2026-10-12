@@ -72,6 +72,7 @@ data class CameraSettings(
     val tapToCapture: Boolean = false,
     val saveOriginal: Boolean = false,
     val mirrorFrontCamera: Boolean = true,
+    val selfieAutoZoom: Boolean = true,
     val shutterSound: Boolean = true,
     val photoFormat: PhotoFormat = PhotoFormat.JPEG,
     val jpegQuality: Int = 95,

@@ -97,21 +97,24 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.aicam.camera.BuildConfig
+import com.dokacam.camera.ai.HintStabilizer
 import com.dokacam.camera.ai.PoseFrame
 import com.dokacam.camera.ai.PoseMatcher
 import com.dokacam.camera.ai.PoseRecommender
+import com.dokacam.camera.ai.SelfieFaceInfo
+import com.dokacam.camera.ai.SelfieGuide
+import com.dokacam.camera.ai.SelfieHint
 import com.dokacam.camera.ai.ShotAdvice
 import com.dokacam.camera.ai.ShotCoach
 import com.dokacam.camera.camera.CameraController
 import com.dokacam.camera.data.media.MediaRepository
-import com.dokacam.camera.data.model.AnchorAlign
 import com.dokacam.camera.data.model.CameraPitch
 import com.dokacam.camera.data.model.CameraSettings
 import com.dokacam.camera.data.model.FilterParams
 import com.dokacam.camera.data.model.FilterPreset
 import com.dokacam.camera.data.model.GuideDirection
 import com.dokacam.camera.data.model.GridType
-import com.dokacam.camera.data.model.PosePoint
+import com.dokacam.camera.data.model.PoseCategory
 import com.dokacam.camera.data.model.PoseTemplate
 import com.dokacam.camera.data.model.PoseTemplates
 import com.dokacam.camera.data.settings.SettingsRepository
@@ -119,6 +122,7 @@ import com.dokacam.camera.filter.FilterPresets
 import com.dokacam.camera.gl.CameraGlView
 import kotlin.math.abs
 import kotlin.math.atan2
+import kotlin.math.roundToInt
 import kotlin.math.sqrt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -288,14 +292,43 @@ fun CameraScreen(
     var poseAutoCapture by remember { mutableStateOf(true) }
     var poseCountdown by remember { mutableStateOf(0) }
 
+    // ---- 自拍引导：大头/半身模板不做骨架匹配，用主脸大小/位置给「闺蜜式」提示 ----
+    var selfieHint by remember { mutableStateOf<String?>(null) }
+    // 主脸信息（视图空间）：模板推荐按取景远近选
+    fun faceInfo(f: RectF): SelfieFaceInfo? {
+        val (x1, y1) = glView.mapAnalysisPointToView(f.left, f.top)
+        val (x2, y2) = glView.mapAnalysisPointToView(f.right, f.bottom)
+        val l = minOf(x1, x2); val r = maxOf(x1, x2)
+        val t = minOf(y1, y2); val b = maxOf(y1, y2)
+        val cx = (l + r) / 2f; val cy = (t + b) / 2f
+        // 脸在画外的映射结果不算有效引导目标
+        if (cx < 0f || cx > 1f || cy < 0f || cy > 1f) return null
+        return SelfieFaceInfo(RectF(l, t, r, b), r - l, cx, cy)
+    }
+    // 自拍自动 2x：切前置后用户手动动过变焦就不再自动干预（设置页可关）
+    var zoomTouchedSinceLensSwitch by remember { mutableStateOf(false) }
+    // 模板 EV 补偿挂起值：CameraX 每次 bind 都会把曝光补偿清零，等相机就绪后重设
+    var posePendingEv by remember { mutableStateOf<Float?>(null) }
+    fun applyEv(ev: Float): Boolean {
+        val info = controller.getExposureInfo() ?: return false
+        if (info.step <= 0f) return false
+        val idx = (ev / info.step).roundToInt().coerceIn(info.range.first, info.range.last)
+        return controller.setExposureCompensationIndex(idx)
+    }
+
     fun exitPoseTemplate() {
         coach.poseModeEnabled = false
+        selfieHint = null
+        posePendingEv = null
+        applyEv(0f)
         posePrevFilterId?.let { prev -> scope.launch { settingsRepo.setSelectedPreset(prev) } }
         // 镜头朝向恢复（mirror_selfie 等模板可能切了前置）：切镜头后 zoomRange 异步重读，
         // 变焦先挂起，由 zoomRange 轮询 LaunchedEffect 用新范围钳制后应用
         val needSwitchBack = posePrevFrontFacing?.let { it != controller.frontFacing } == true
         if (needSwitchBack) {
             controller.switchCamera(); bindTick++
+            // 恢复用户此前变焦后，不再触发自拍自动 2x
+            zoomTouchedSinceLensSwitch = true
         }
         posePrevZoom?.let { z ->
             if (needSwitchBack) {
@@ -325,24 +358,36 @@ fun CameraScreen(
         }
         activeTemplateId = t.id
         poseMatch = null
-        coach.poseModeEnabled = true
+        selfieHint = null
+        // 大头/半身走脸部轻量引导，只有全身（带骨架）模板跑骨架匹配
+        coach.poseModeEnabled = t.skeleton != null
         if (!aiOn.value) aiOn.value = true // 模板依赖分析帧，强制开 AI 管线
+        t.filterId?.let { id -> scope.launch { settingsRepo.setSelectedPreset(id) } }
+        // 要求前置镜头的模板（对镜自拍）：自动切前置
+        val switching = t.frontCamera && !controller.frontFacing
+        if (switching) {
+            controller.switchCamera(); activeZoom = 1f; bindTick++
+            zoomTouchedSinceLensSwitch = false
+        }
         t.zoom?.let { z ->
             val range = zoomRange
             val target = if (range != null) z.coerceIn(range.first, range.second) else z
             if (controller.setZoomRatio(target)) activeZoom = target
         }
-        t.filterId?.let { id -> scope.launch { settingsRepo.setSelectedPreset(id) } }
-        // 对镜自拍模板：自动切前置
-        if (t.id == "mirror_selfie" && !controller.frontFacing) {
-            controller.switchCamera(); activeZoom = 1f; bindTick++
+        // 曝光补偿：切镜头重绑会清零 → 挂起待相机就绪后重设；否则直接应用
+        if (switching) {
+            posePendingEv = t.exposureEv
+        } else if (!applyEv(t.exposureEv)) {
+            posePendingEv = t.exposureEv
         }
     }
 
-    // 姿态匹配：模板激活期间收集分析帧姿态 → 平滑打分 + 引导文案
+    // 姿态匹配：仅全身（带骨架）模板期间收集分析帧姿态 → 平滑打分 + 引导文案
     LaunchedEffect(activeTemplateId) {
         val id = activeTemplateId ?: return@LaunchedEffect
-        val matcher = PoseMatcher(PoseTemplates.byId.getValue(id))
+        val t = PoseTemplates.byId.getValue(id)
+        if (t.skeleton == null) { poseMatch = null; return@LaunchedEffect }
+        val matcher = PoseMatcher(t)
         coach.advice.collect { adv ->
             val pose = adv.pose
             poseMatch = when {
@@ -354,13 +399,60 @@ fun CameraScreen(
         }
     }
 
-    // 退出模板切回镜头后：等 zoomRange 轮询到新镜头范围，再钳制应用暂存的变焦
-    LaunchedEffect(zoomRange, posePendingZoom) {
-        val z = posePendingZoom ?: return@LaunchedEffect
-        val r = zoomRange ?: return@LaunchedEffect
-        posePendingZoom = null
-        val target = z.coerceIn(r.first, r.second)
-        if (controller.setZoomRatio(target)) activeZoom = target
+    // 自拍引导（大头/半身模板）：脸大小→距离提示，脸位置→居中提示；2s 无脸才提醒
+    LaunchedEffect(activeTemplateId) {
+        val id = activeTemplateId ?: return@LaunchedEffect
+        val t = PoseTemplates.byId.getValue(id)
+        if (t.skeleton != null) { selfieHint = null; return@LaunchedEffect }
+        val stabilizer = HintStabilizer()
+        var noFaceSince = 0L
+        coach.advice.collect { adv ->
+            val now = SystemClock.elapsedRealtime()
+            val face = adv.faces.maxByOrNull { it.width() * it.height() }
+            val hint = if (face == null) {
+                if (noFaceSince == 0L) noFaceSince = now
+                if (now - noFaceSince >= 2000L) SelfieGuide.noFaceHint(t.category) else null
+            } else {
+                noFaceSince = 0L
+                faceInfo(face)?.let { fi ->
+                    SelfieGuide.sizeHint(fi.sizeFrac, t.category)
+                        ?: SelfieGuide.centerHint(fi.centerX, fi.centerY, t.subjectArea, controller.frontFacing)
+                }
+            }
+            selfieHint = stabilizer.push(hint, now)?.text
+        }
+    }
+
+    // 退出模板切回镜头后：等 zoomRange 轮询到新镜头范围，再钳制应用暂存的变焦/EV
+    LaunchedEffect(zoomRange, posePendingZoom, posePendingEv) {
+        val r = zoomRange
+        val z = posePendingZoom
+        if (z != null && r != null) {
+            posePendingZoom = null
+            val target = z.coerceIn(r.first, r.second)
+            if (controller.setZoomRatio(target)) activeZoom = target
+        }
+        if (posePendingEv != null && applyEv(posePendingEv!!)) posePendingEv = null
+    }
+
+    // 自拍自动 2x：前置 + 单人脸 + 未开模板 + 用户没动过变焦 → 自动拉到人像焦段（设置可关）
+    LaunchedEffect(bindTick, settings.selfieAutoZoom) {
+        if (!settings.selfieAutoZoom) return@LaunchedEffect
+        if (!controller.frontFacing || activeTemplateId != null) return@LaunchedEffect
+        if (zoomTouchedSinceLensSwitch) return@LaunchedEffect
+        // 等前置画面出现单人脸（最多 15s），期间用户动变焦/开模板则放弃
+        val deadline = SystemClock.elapsedRealtime() + 15_000L
+        while (SystemClock.elapsedRealtime() < deadline) {
+            if (zoomTouchedSinceLensSwitch || activeTemplateId != null) return@LaunchedEffect
+            if (coach.advice.value.faces.size == 1) break
+            delay(300)
+        }
+        if (coach.advice.value.faces.size != 1) return@LaunchedEffect
+        val range = controller.getZoomRange() ?: return@LaunchedEffect
+        val target = 2f.coerceIn(range.first, range.second)
+        if (abs(controller.getZoomRatio() - target) > 0.05f && controller.setZoomRatio(target)) {
+            activeZoom = target
+        }
     }
 
     var focusPoint by remember { mutableStateOf<Offset?>(null) }
@@ -471,6 +563,10 @@ fun CameraScreen(
 
     var viewSize by remember { mutableStateOf(IntSize.Zero) }
     val advice by coach.advice.collectAsState()
+    // 主脸视图空间信息：模板推荐按取景远近选（无脸 → 全身类推荐）
+    val selfieFace = remember(advice) {
+        advice.faces.maxByOrNull { it.width() * it.height() }?.let(::faceInfo)
+    }
     val gridType = settings.gridType
     val tapToCapture = settings.tapToCapture
 
@@ -576,7 +672,9 @@ fun CameraScreen(
                 .pointerInput(tapToCapture) {
                     // 触屏拍摄开启时禁用双击切镜头（与单拍手势冲突，镜头切换走底部按钮）
                     val switchLens: ((Offset) -> Unit)? = if (tapToCapture) null else { _ ->
-                        controller.switchCamera(); activeZoom = 1f; bindTick++; poke()
+                        controller.switchCamera(); activeZoom = 1f; bindTick++
+                        zoomTouchedSinceLensSwitch = false
+                        poke()
                     }
                     detectTapGestures(
                         onTap = { offset ->
@@ -616,7 +714,11 @@ fun CameraScreen(
                             val target = if (range != null)
                                 (current * zoom).coerceIn(range.first, range.second)
                             else current * zoom
-                            if (controller.setZoomRatio(target)) { activeZoom = target; poke() }
+                            if (controller.setZoomRatio(target)) {
+                                activeZoom = target
+                                zoomTouchedSinceLensSwitch = true
+                                poke()
+                            }
                         }
                     }
                 }
@@ -636,26 +738,13 @@ fun CameraScreen(
             )
         }
 
-        // 姿势模板叠加：目标区域 + 金色模板轮廓 + 实时轮廓（按肢体段着色）；
-        // 模板带锚定类目标时，检出即把轮廓贴到检测框上（「坐到椅子上」）
+        // 姿势模板叠加：目标区域四角括弧 + 金色线条画轮廓 + 实时骨架（仅全身类）
         activeTemplateId?.let { id ->
             val t = PoseTemplates.byId.getValue(id)
-            val anchorBox: RectF? = t.anchorLabel?.let { label ->
-                advice.objects
-                    .filter { it.label == label }
-                    .maxByOrNull { it.box.width() * it.box.height() }
-                    ?.box?.let { b ->
-                        val (x1, y1) = glView.mapAnalysisPointToView(b.left, b.top)
-                        val (x2, y2) = glView.mapAnalysisPointToView(b.right, b.bottom)
-                        // 前摄镜像/旋转换向时两端点可能互换，排序保证正宽高
-                        RectF(minOf(x1, x2), minOf(y1, y2), maxOf(x1, x2), maxOf(y1, y2))
-                    }
-            }
             PoseGuideOverlay(
                 template = t,
                 pose = advice.pose,
                 match = poseMatch,
-                anchorBox = anchorBox,
                 glView = glView,
             )
         }
@@ -772,6 +861,7 @@ fun CameraScreen(
                     val target = if (range != null) z.coerceIn(range.first, range.second) else z
                     if (controller.setZoomRatio(target)) {
                         activeZoom = target
+                        zoomTouchedSinceLensSwitch = true
                         if (BuildConfig.DEBUG) {
                             Log.i(TAG_ZOOM_SUGGEST, "apply suggested zoom ${fmtZoom(z)}x -> ${fmtZoom(target)}x")
                         }
@@ -796,19 +886,14 @@ fun CameraScreen(
             )
         }
 
-        // 姿势模板教练卡：tips 轮播 + 匹配分数条 + 引导文案 + 机位/锚定提示
+        // 姿势模板教练卡：tips 轮播 + 匹配分数条（全身）/ 自拍引导（大头、半身）+ 机位提示
         activeTemplateId?.let { id ->
             val t = PoseTemplates.byId.getValue(id)
-            // 锚定目标未检出时的对准提示（检出后锚定生效，提示消失）
-            val anchorHint = t.anchorLabel?.let { label ->
-                val found = advice.objects.any { it.label == label }
-                if (found) null else "把镜头对准${anchorLabelCn(label)}"
-            }
             PoseCoachCard(
                 template = t,
                 match = poseMatch,
                 pitchDeg = pitchDeg,
-                anchorHint = anchorHint,
+                selfieHint = selfieHint,
                 autoCapture = poseAutoCapture,
                 onToggleAutoCapture = { poseAutoCapture = !poseAutoCapture; poke() },
                 modifier = Modifier.align(Alignment.TopCenter)
@@ -827,9 +912,9 @@ fun CameraScreen(
                     templates = PoseTemplates.ALL,
                     selectedId = activeTemplateId,
                     recommendations = remember(
-                        advice.objects.map { it.label }.toSet(), advice.lowLight, controller.frontFacing,
+                        selfieFace?.sizeFrac, advice.lowLight, controller.frontFacing,
                     ) {
-                        PoseRecommender.recommend(advice.objects, advice.lowLight, controller.frontFacing)
+                        PoseRecommender.recommend(selfieFace?.sizeFrac, controller.frontFacing, advice.lowLight)
                     },
                     onSelect = { id ->
                         if (id == null) exitPoseTemplate()
@@ -934,7 +1019,9 @@ fun CameraScreen(
                                     .background(if (selected) Color.White.copy(alpha = 0.95f) else Color.Transparent)
                                     .clickable {
                                         val clamped = if (range != null) z.coerceIn(range.first, range.second) else z
-                                        activeZoom = clamped; controller.setZoomRatio(clamped); poke()
+                                        activeZoom = clamped; controller.setZoomRatio(clamped)
+                                        zoomTouchedSinceLensSwitch = true
+                                        poke()
                                     }
                                     .padding(horizontal = 12.dp, vertical = 5.dp)
                             ) {
@@ -995,7 +1082,11 @@ fun CameraScreen(
                 )
                 Box(
                     Modifier.size(44.dp).clip(CircleShape).background(Color.Black.copy(alpha = 0.35f))
-                        .clickable { controller.switchCamera(); activeZoom = 1f; bindTick++; poke() },
+                        .clickable {
+                            controller.switchCamera(); activeZoom = 1f; bindTick++
+                            zoomTouchedSinceLensSwitch = false
+                            poke()
+                        },
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(Icons.Filled.Refresh, contentDescription = "翻转相机", tint = Color.White)
@@ -1353,10 +1444,9 @@ private suspend fun decodeThumb(context: Context, uri: Uri): Bitmap? = withConte
 
 /**
  * 姿势模板叠加层（极简时尚线条画风格）：
- *  - 金色虚位框：模板的人物目标区域（subjectArea，未锚定时）
- *  - 金色线条画：模板 artPath（0-100 视框 SVG path）等比映射；
- *    带 anchorLabel 且检出该类目标时锚定到检测框（底边对齐，「坐到椅子上」）
- *  - 青色骨骼线：PoseLandmarker 实时姿态（[CameraGlView.mapAnalysisPointToView]
+ *  - 金色四角括弧：模板的人物目标区域（subjectArea），轻盈不压画面
+ *  - 金色线条画：模板 artPath（按内容包围盒适配，全身类底边对齐「站在地上」）
+ *  - 青色骨骼线：仅全身类模板，PoseLandmarker 实时姿态（[CameraGlView.mapAnalysisPointToView]
  *    同源映射，前摄镜像已含），按肢体段着色：匹配好=绿，偏差大=红
  */
 @Composable
@@ -1364,7 +1454,6 @@ private fun PoseGuideOverlay(
     template: PoseTemplate,
     pose: PoseFrame?,
     match: PoseMatcher.MatchResult?,
-    anchorBox: RectF?,   // 视图归一化；模板锚定目标的检测框（未检出为 null）
     glView: CameraGlView,
 ) {
     val gold = Color(0xFFF2C14E)
@@ -1373,89 +1462,51 @@ private fun PoseGuideOverlay(
     Canvas(Modifier.fillMaxSize()) {
         val w = size.width
         val h = size.height
-        val anchored = anchorBox != null && template.anchorLabel != null
 
-        if (anchored) {
-            // 锚定框描边：让「轮廓跟着框走」肉眼可见
-            drawRoundRect(
-                color = gold.copy(alpha = 0.55f),
-                topLeft = Offset(anchorBox.left * w, anchorBox.top * h),
-                size = Size(anchorBox.width() * w, anchorBox.height() * h),
-                cornerRadius = CornerRadius(8.dp.toPx()),
-                style = Stroke(width = 1.5.dp.toPx()),
-            )
-        } else {
-            // 目标区域框（锚定模板未检出目标时仍画，作回退参考）
-            val area = template.subjectArea
-            drawRoundRect(
-                color = gold.copy(alpha = 0.30f),
-                topLeft = Offset(area.left * w, area.top * h),
-                size = Size(area.width() * w, area.height() * h),
-                cornerRadius = CornerRadius(10.dp.toPx()),
-                style = Stroke(width = 1.5.dp.toPx()),
+        // 目标区域：四角分离的细括弧，比整圈方框更轻盈
+        val area = template.subjectArea
+        drawCornerBrackets(
+            Rect(area.left * w, area.top * h, area.right * w, area.bottom * h),
+            gold.copy(alpha = 0.55f),
+            lenPx = 14.dp.toPx(),
+            strokePx = 2.dp.toPx(),
+        )
+
+        // 模板参考轮廓：手绘线条画按内容包围盒适配
+        if (artPaths.isNotEmpty()) {
+            val top = maxOf(area.top * h, 132.dp.toPx())
+            val dst = Rect(area.left * w, top, area.right * w, area.bottom * h)
+            drawArtPaths(
+                artPaths, dst, gold.copy(alpha = 0.8f),
+                strokePx = 3.dp.toPx(),
+                alignBottom = template.category == PoseCategory.FULL,
+                fitContent = true,
             )
         }
 
-        // 模板参考轮廓：手绘线条画优先，无则骨架自动渲染（同一 dst 映射）
-        val skeleton = template.skeleton
-        if (artPaths.isNotEmpty() || skeleton != null) {
-            val alpha: Float
-            val dst: Rect
-            if (anchored && anchorBox != null) {
-                val ax = anchorBox.left * w
-                val ay = anchorBox.top * h
-                val aw = anchorBox.width() * w
-                val ah = anchorBox.height() * h
-                val acx = ax + aw / 2f
-                val side = when (template.anchorAlign) {
-                    AnchorAlign.SIT_ON -> aw * 1.2f
-                    AnchorAlign.STAND_BEHIND -> ah * 1.6f
-                    AnchorAlign.LEAN_ON -> aw * 1.1f
+        // 实时检测骨骼线（仅全身类模板；分析帧归一化 → 视图坐标，与 AI 主体框同一映射）
+        if (template.skeleton != null) {
+            val lm = pose?.landmarks
+            if (lm != null && lm.size >= 33) {
+                val livePts = List(33) { i ->
+                    val p = lm[i]
+                    if (p.visibility < 0.5f) null
+                    else {
+                        val (vx, vy) = glView.mapAnalysisPointToView(p.x, p.y)
+                        Offset(vx * w, vy * h)
+                    }
                 }
-                val bottom = when (template.anchorAlign) {
-                    AnchorAlign.SIT_ON -> ay + ah * 0.95f
-                    else -> ay + ah
-                }
-                dst = Rect(acx - side / 2f, bottom - side, acx + side / 2f, bottom)
-                alpha = 0.8f
-            } else {
-                val area = template.subjectArea
-                val top = maxOf(area.top * h, 132.dp.toPx())
-                dst = Rect(area.left * w, top, area.right * w, area.bottom * h)
-                // 模板要求锚定但没检出目标 → 淡显
-                alpha = if (template.anchorLabel != null) 0.25f else 0.8f
-            }
-            if (artPaths.isNotEmpty()) {
-                drawArtPaths(
-                    artPaths, dst, gold.copy(alpha = alpha),
-                    strokePx = 3.dp.toPx(), alignBottom = anchored,
+                drawPoseBones(
+                    livePts,
+                    liveColor.copy(alpha = 0.9f),
+                    jointErrors = match?.jointErrors,
                 )
-            } else if (skeleton != null) {
-                drawSkeletonFigure(skeleton, dst, gold.copy(alpha = alpha), alignBottom = anchored)
             }
-        }
-
-        // 实时检测骨骼线（分析帧归一化 → 视图坐标，与 AI 主体框同一映射）
-        val lm = pose?.landmarks
-        if (lm != null && lm.size >= 33) {
-            val livePts = List(33) { i ->
-                val p = lm[i]
-                if (p.visibility < 0.5f) null
-                else {
-                    val (vx, vy) = glView.mapAnalysisPointToView(p.x, p.y)
-                    Offset(vx * w, vy * h)
-                }
-            }
-            drawPoseBones(
-                livePts,
-                liveColor.copy(alpha = 0.9f),
-                jointErrors = match?.jointErrors,
-            )
         }
     }
 }
 
-/** 模板选择面板：推荐条 + 横向模板卡片（剪影示例图 + 名称 + 场景/焦段/机位），首位为「无」退出卡 */
+/** 模板选择面板：推荐条 + 取景分类胶囊（大头/半身/全身）+ 横向模板卡片，首位为「无」退出卡 */
 @Composable
 private fun PoseTemplatePanel(
     templates: List<PoseTemplate>,
@@ -1464,10 +1515,31 @@ private fun PoseTemplatePanel(
     onSelect: (String?) -> Unit,
 ) {
     val gold = Color(0xFFF2C14E)
+    var tab by remember { mutableStateOf(PoseCategory.HEAD) }
     Column {
         // 场景推荐：只在还没选中模板时提示，避免和引导卡抢注意力
         if (recommendations.isNotEmpty() && selectedId == null) {
             PoseRecommendStrip(recommendations, gold) { onSelect(it) }
+        }
+        // 取景分类胶囊
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            PoseCategory.entries.forEach { c ->
+                val active = c == tab
+                Text(
+                    c.label,
+                    color = if (active) Color.Black else Color.White.copy(alpha = 0.85f),
+                    fontSize = 12.sp,
+                    fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(50))
+                        .background(if (active) gold else Color.White.copy(alpha = 0.10f))
+                        .clickable { tab = c }
+                        .padding(horizontal = 14.dp, vertical = 5.dp),
+                )
+            }
         }
         LazyRow(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1483,23 +1555,21 @@ private fun PoseTemplatePanel(
                     name = "无",
                     subtitle = "退出模板",
                     artPath = "",
-                    skeleton = null,
                     placeholder = "",
                     selected = selectedId == null,
                     gold = gold,
                 ) { onSelect(null) }
             }
-            items(templates, key = { it.id }) { t ->
+            items(templates.filter { it.category == tab }, key = { it.id }) { t ->
                 PoseTemplateCard(
                     name = t.name,
                     subtitle = buildString {
-                        append(t.category.label)
-                        append(" · ").append(t.pitch.label)
+                        append(t.pitch.label)
                         t.zoom?.let { append(" · ").append(if (it == it.toInt().toFloat()) "${it.toInt()}x" else "${it}x") }
                     },
                     artPath = t.artPath,
-                    skeleton = t.skeleton,
                     placeholder = "技巧引导",
+                    alignBottom = t.category == PoseCategory.FULL,
                     selected = t.id == selectedId,
                     gold = gold,
                 ) { onSelect(t.id) }
@@ -1550,9 +1620,10 @@ private fun RecommendCard(rec: PoseRecommender.Rec, gold: Color, onClick: () -> 
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         if (t.artPath.isNotEmpty()) {
-            PoseArtCanvas(t.artPath, gold, Modifier.fillMaxWidth().weight(1f))
-        } else if (t.skeleton != null) {
-            SkeletonArtCanvas(t.skeleton, gold, Modifier.fillMaxWidth().weight(1f))
+            PoseArtCanvas(
+                t.artPath, gold, Modifier.fillMaxWidth().weight(1f),
+                alignBottom = t.category == PoseCategory.FULL,
+            )
         } else {
             Spacer(Modifier.weight(1f))
         }
@@ -1572,10 +1643,10 @@ private fun PoseTemplateCard(
     name: String,
     subtitle: String,
     artPath: String,
-    skeleton: List<PosePoint>?,
     placeholder: String,
     selected: Boolean,
     gold: Color,
+    alignBottom: Boolean = false,
     onClick: () -> Unit,
 ) {
     Column(
@@ -1588,17 +1659,13 @@ private fun PoseTemplateCard(
             .padding(horizontal = 10.dp, vertical = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        // 示例图：手绘线条画优先，无则骨架自动渲染，再退文字占位
+        // 示例图：手绘线条画（按内容包围盒适配），无则文字占位
         when {
             artPath.isNotEmpty() -> PoseArtCanvas(
                 artPath = artPath,
                 color = if (selected) gold else Color.White.copy(alpha = 0.9f),
                 modifier = Modifier.fillMaxWidth().weight(1f),
-            )
-            skeleton != null -> SkeletonArtCanvas(
-                skeleton = skeleton,
-                color = if (selected) gold else Color.White.copy(alpha = 0.9f),
-                modifier = Modifier.fillMaxWidth().weight(1f),
+                alignBottom = alignBottom,
             )
             placeholder.isNotEmpty() -> Box(
                 Modifier.fillMaxWidth().weight(1f),
@@ -1621,15 +1688,15 @@ private fun PoseTemplateCard(
 }
 
 /**
- * 姿势教练卡：模板名 + tips 轮播（4s 一条）+ 匹配分数条 + 分段引导 + 机位俯仰提示。
- * 匹配 ≥85 稳定约 1s 后亮「完美！可以拍了」（仅提示，不自动拍）。
+ * 姿势教练卡：模板名 + tips 轮播（4s 一条）+ 匹配分数条（全身）/ 自拍引导（大头、半身）+ 机位俯仰提示。
+ * 全身类匹配 ≥85 稳定约 1s 后亮「完美！可以拍了」（仅提示，不自动拍）。
  */
 @Composable
 private fun PoseCoachCard(
     template: PoseTemplate,
     match: PoseMatcher.MatchResult?,
     pitchDeg: Float,
-    anchorHint: String? = null,
+    selfieHint: String? = null,
     autoCapture: Boolean = true,
     onToggleAutoCapture: () -> Unit = {},
     modifier: Modifier = Modifier,
@@ -1644,6 +1711,7 @@ private fun PoseCoachCard(
     }
     val pitchHint = pitchHintFor(template.pitch, pitchDeg)
     val ready = match?.ready == true
+    val hasSkeleton = template.skeleton != null
 
     Column(
         modifier
@@ -1664,18 +1732,21 @@ private fun PoseCoachCard(
                     (template.zoom?.let { " · ${if (it == it.toInt().toFloat()) "${it.toInt()}x" else "${it}x"}" } ?: ""),
                 color = Color.White.copy(alpha = 0.6f), fontSize = 11.sp, maxLines = 1,
             )
-            Spacer(Modifier.weight(1f))
-            Text(
-                if (autoCapture) "自动拍" else "手动拍",
-                color = if (autoCapture) gold else Color.White.copy(alpha = 0.55f),
-                fontSize = 10.sp,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(50))
-                    .background(if (autoCapture) gold.copy(alpha = 0.18f) else Color.White.copy(alpha = 0.08f))
-                    .clickable { onToggleAutoCapture() }
-                    .padding(horizontal = 8.dp, vertical = 3.dp),
-            )
+            // 自动拍摄开关只对全身（骨架匹配）模板有意义
+            if (hasSkeleton) {
+                Spacer(Modifier.weight(1f))
+                Text(
+                    if (autoCapture) "自动拍" else "手动拍",
+                    color = if (autoCapture) gold else Color.White.copy(alpha = 0.55f),
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(50))
+                        .background(if (autoCapture) gold.copy(alpha = 0.18f) else Color.White.copy(alpha = 0.08f))
+                        .clickable { onToggleAutoCapture() }
+                        .padding(horizontal = 8.dp, vertical = 3.dp),
+                )
+            }
             Spacer(Modifier.size(7.dp))
             Text(
                 "技巧 ${tipIdx + 1}/${template.tips.size}",
@@ -1687,8 +1758,8 @@ private fun PoseCoachCard(
             template.tips[tipIdx],
             color = Color.White, fontSize = 12.sp, maxLines = 1,
         )
-        // 匹配分数条 + 引导（仅带骨架的模板有匹配分）
-        if (template.skeleton != null) {
+        if (hasSkeleton) {
+            // 匹配分数条 + 引导（仅带骨架的模板有匹配分）
             Spacer(Modifier.size(6.dp))
             val score = match?.score ?: 0
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1720,27 +1791,21 @@ private fun PoseCoachCard(
                     maxLines = 1,
                 )
             }
+        } else {
+            // 大头/半身：闺蜜式脸部引导（拿远/靠近/移镜头）
+            selfieHint?.let { hint ->
+                Spacer(Modifier.size(4.dp))
+                Text(
+                    "✧ $hint",
+                    color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 1,
+                )
+            }
         }
         pitchHint?.let { hint ->
             Spacer(Modifier.size(3.dp))
             Text(hint, color = Color(0xFFFFB74D), fontSize = 12.sp, maxLines = 1)
         }
-        anchorHint?.let { hint ->
-            Spacer(Modifier.size(3.dp))
-            Text("🪑 $hint", color = Color(0xFFFFB74D), fontSize = 12.sp, maxLines = 1)
-        }
     }
-}
-
-/** 锚定目标 COCO 类名 → 中文（对准提示用） */
-private fun anchorLabelCn(label: String): String = when (label) {
-    "chair" -> "椅子/座位"
-    "couch" -> "沙发"
-    "bench" -> "长凳/台阶"
-    "dining table" -> "餐桌"
-    "bed" -> "床"
-    "tv" -> "电视"
-    else -> label
 }
 
 /** 模板机位 vs 实测俯仰角（屏朝上为正=俯拍）：不符时给带方向的可执行提示 */

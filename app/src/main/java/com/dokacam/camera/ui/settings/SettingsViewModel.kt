@@ -23,6 +23,7 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     fun setTapToCapture(v: Boolean) = launch { repo.setTapToCapture(v) }
     fun setLevelEnabled(v: Boolean) = launch { repo.setLevelEnabled(v) }
     fun setMirrorFront(v: Boolean) = launch { repo.setMirrorFront(v) }
+    fun setSelfieAutoZoom(v: Boolean) = launch { repo.setSelfieAutoZoom(v) }
     fun setAspectRatio(v: com.dokacam.camera.data.model.AspectRatio) = launch { repo.setAspectRatio(v) }
     fun setPhotoFormat(v: com.dokacam.camera.data.model.PhotoFormat) = launch { repo.setPhotoFormat(v) }
     fun setJpegQuality(v: Int) = launch { repo.setJpegQuality(v) }

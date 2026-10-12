@@ -35,6 +35,7 @@ class SettingsRepository(private val context: Context) {
         val tapCapture = booleanPreferencesKey("tap_to_capture")
         val saveOriginal = booleanPreferencesKey("save_original")
         val mirrorFront = booleanPreferencesKey("mirror_front")
+        val selfieAutoZoom = booleanPreferencesKey("selfie_auto_zoom")
         val shutterSound = booleanPreferencesKey("shutter_sound")
         val photoFormat = stringPreferencesKey("photo_format")
         val jpegQuality = intPreferencesKey("jpeg_quality")
@@ -61,6 +62,7 @@ class SettingsRepository(private val context: Context) {
             tapToCapture = p[Keys.tapCapture] ?: false,
             saveOriginal = p[Keys.saveOriginal] ?: false,
             mirrorFrontCamera = p[Keys.mirrorFront] ?: true,
+            selfieAutoZoom = p[Keys.selfieAutoZoom] ?: true,
             shutterSound = p[Keys.shutterSound] ?: true,
             photoFormat = runCatching { PhotoFormat.valueOf(p[Keys.photoFormat] ?: "JPEG") }.getOrDefault(PhotoFormat.JPEG),
             jpegQuality = p[Keys.jpegQuality] ?: 95,
@@ -88,6 +90,7 @@ class SettingsRepository(private val context: Context) {
     suspend fun setTapToCapture(v: Boolean) = context.dataStore.edit { it[Keys.tapCapture] = v }
     suspend fun setSaveOriginal(v: Boolean) = context.dataStore.edit { it[Keys.saveOriginal] = v }
     suspend fun setMirrorFront(v: Boolean) = context.dataStore.edit { it[Keys.mirrorFront] = v }
+    suspend fun setSelfieAutoZoom(v: Boolean) = context.dataStore.edit { it[Keys.selfieAutoZoom] = v }
     suspend fun setShutterSound(v: Boolean) = context.dataStore.edit { it[Keys.shutterSound] = v }
     suspend fun setPhotoFormat(v: PhotoFormat) = context.dataStore.edit { it[Keys.photoFormat] = v.name }
     suspend fun setJpegQuality(v: Int) = context.dataStore.edit { it[Keys.jpegQuality] = v }

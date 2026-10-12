@@ -2,14 +2,11 @@ package com.dokacam.camera.data.model
 
 import android.graphics.RectF
 
-/** 拍摄场景分类（网红模板分组展示用） */
+/** 自拍取景分类（不依赖场景：大头/半身/全身） */
 enum class PoseCategory(val label: String) {
-    STREET("街拍"),
-    SHOP("探店"),
-    OUTDOOR("户外"),
-    HOME("居家"),
-    NIGHT("夜景"),
-    SELFIE("自拍"),
+    HEAD("大头照"),
+    HALF("半身照"),
+    FULL("全身照"),
 }
 
 /** 机位俯仰要求 */
@@ -20,16 +17,6 @@ enum class CameraPitch(val label: String) {
     ANY("不限"),
 }
 
-/** 轮廓与场景锚定目标的对齐方式 */
-enum class AnchorAlign {
-    /** 坐姿：髋线（canonical y=0）贴检测框顶部约 1/5 处，轮廓宽=框宽×1.2 */
-    SIT_ON,
-    /** 站姿：脚底（canonical 最大 y）贴检测框底部，人比框高 */
-    STAND_BEHIND,
-    /** 倚靠：髋部贴检测框顶部中线，轮廓宽≈框宽 */
-    LEAN_ON,
-}
-
 /**
  * 模板骨架点。归一化坐标，y 向下；以髋部中心为原点、
  * 躯干长（肩中点→髋中点）为 1 的缩放无关坐标系。
@@ -38,14 +25,17 @@ enum class AnchorAlign {
 data class PosePoint(val x: Float, val y: Float, val weight: Float = 1f)
 
 /**
- * 网红人像拍摄模板：拍摄技巧 + 相机参数 + 姿势骨架。
+ * 自拍姿势模板：拍摄技巧 + 相机参数 + 姿势骨架。
  *
- * @param subjectArea 人物应占据的画面区域（视图归一化坐标，无锚定目标时轮廓映射到这里）
+ * @param subjectArea 人物应占据的画面区域（视图归一化坐标，参考轮廓映射到这里）
  * @param zoom        推荐变焦倍率（null = 不动当前变焦）
+ * @param pitch       机位俯仰要求
  * @param filterId    推荐滤镜（[com.dokacam.camera.filter.FilterPresets] 的 id，null = 不动）
- * @param skeleton    33 点模板骨架（BlazePose 索引对齐，weight=0 的点忽略）；null = 无骨架参考
- * @param anchorLabel 场景锚定目标的 COCO 类名（"chair"/"couch"/"bench" 等，null=不锚定）；
- *                    检测到该类目标时轮廓改贴检测框，检测不到时淡显在 subjectArea 并提示对准
+ * @param skeleton    33 点模板骨架（BlazePose 索引对齐，weight=0 的点忽略）；
+ *                    仅全身（FULL）类模板提供——大头/半身用脸部引导，无骨架匹配
+ * @param frontCamera 模板要求前置镜头（对镜自拍等）
+ * @param exposureEv  推荐 EV 补偿（0 = 不动；大头/半身小正补偿提亮肤色）
+ * @param artPath     艺术线条画（SVG path，M/L/C/Q/Z 绝对坐标，0-100 视框）；每个模板必填
  */
 data class PoseTemplate(
     val id: String,
@@ -57,10 +47,9 @@ data class PoseTemplate(
     val subjectArea: RectF,
     val filterId: String?,
     val skeleton: List<PosePoint>? = null,
-    val anchorLabel: String? = null,
-    val anchorAlign: AnchorAlign = AnchorAlign.SIT_ON,
-    /** 艺术线条画（SVG path，M/L/C/Q/Z 绝对坐标，0-100 视框）；空串=无示例图 */
-    val artPath: String = "",
+    val frontCamera: Boolean = false,
+    val exposureEv: Float = 0f,
+    val artPath: String,
 )
 
 /** BlazePose 33 点索引常量（奇数=左，偶数=右，以被摄者自身为准） */

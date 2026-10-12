@@ -1,56 +1,70 @@
 package com.dokacam.camera.ai
 
+import com.dokacam.camera.data.model.PoseCategory
 import com.dokacam.camera.data.model.PoseTemplate
 import com.dokacam.camera.data.model.PoseTemplates
 
 /**
- * 场景 → 模板推荐：复用已检测到的 COCO 物体标签 + 光线 + 镜头朝向，
- * 零新增模型，给小白一条「现在该拍什么姿势」的捷径。
+ * 自拍姿势推荐：按「取景距离」（主脸大小）+ 镜头朝向 + 光线给建议，
+ * 完全不依赖场景物体 —— 白墙、对镜、空地都能出片。
  *
- * 推荐语按「闺蜜给建议」的口吻写，而不是工程化的「检测到 chair」——
- * 目标用户是女生，建议要温柔、有画面感。
+ * 推荐语按「闺蜜给建议」的口吻写，温柔、有画面感，而不是工程化描述。
  */
 object PoseRecommender {
 
     data class Rec(val template: PoseTemplate, val reason: String)
 
-    /**
-     * 返回 0~3 条推荐（去重、按场景相关度排序）。
-     * @param objects    已检测到的 COCO 物体（带标签）
-     * @param lowLight   帧亮度偏低（夜景/室内暖光）
-     * @param frontFacing 当前是否前置镜头
-     */
-    fun recommend(objects: List<ObjectHit>, lowLight: Boolean, frontFacing: Boolean): List<Rec> {
-        val recs = ArrayList<Rec>()
-        val labels = objects.map { it.label }.toSet()
+    /** 主脸宽度占视图宽的比例推断取景：null（没检测到脸）→ 全身 */
+    fun inferCategory(faceSizeFrac: Float?): PoseCategory = when {
+        faceSizeFrac == null -> PoseCategory.FULL
+        faceSizeFrac > 0.22f -> PoseCategory.HEAD
+        faceSizeFrac > 0.10f -> PoseCategory.HALF
+        else -> PoseCategory.FULL
+    }
 
-        if (labels.any { it in CHAIR }) {
-            recs += Rec(PoseTemplates.byId.getValue("cafe_sit"), "有椅子，侧坐构图更出片")
-        }
-        if (labels.any { it in BENCH }) {
-            recs += Rec(PoseTemplates.byId.getValue("stairs_sit"), "有长椅，坐下伸腿显腿长")
-        }
-        if (labels.any { it in COUCH }) {
-            recs += Rec(PoseTemplates.byId.getValue("home_cozy"), "窝进沙发，暖光下更有氛围感")
+    /**
+     * 返回 0~3 条推荐（去重、按取景相关度排序）。
+     * @param faceSizeFrac 主脸宽/视图宽（null = 未检测到脸）
+     * @param frontFacing  当前是否前置镜头
+     * @param lowLight     帧亮度偏低（夜景/室内暗光）
+     */
+    fun recommend(faceSizeFrac: Float?, frontFacing: Boolean, lowLight: Boolean): List<Rec> {
+        val recs = ArrayList<Rec>()
+        when (inferCategory(faceSizeFrac)) {
+            PoseCategory.HEAD -> {
+                if (frontFacing) {
+                    recs += Rec(PoseTemplates.byId.getValue("head_pout"), "前置自拍，试试松弛感大头照")
+                    recs += Rec(PoseTemplates.byId.getValue("head_hair"), "撩发瞬间最出片")
+                } else {
+                    recs += Rec(PoseTemplates.byId.getValue("head_chin"), "大头照托个脸，脸小一圈")
+                }
+            }
+            PoseCategory.HALF -> {
+                recs += Rec(PoseTemplates.byId.getValue("half_collarbone"), "半身构图，手放锁骨显气质")
+                if (frontFacing) {
+                    recs += Rec(PoseTemplates.byId.getValue("half_prop"), "拿个小道具，手上不空更好看")
+                }
+            }
+            PoseCategory.FULL -> {
+                if (frontFacing) {
+                    recs += Rec(PoseTemplates.byId.getValue("full_mirror"), "前置镜头，对镜自拍最自然")
+                } else {
+                    recs += Rec(PoseTemplates.byId.getValue("full_sline"), "退远一点，全身 S 站姿显腿长")
+                    recs += Rec(PoseTemplates.byId.getValue("full_crossleg"), "交叉腿一站，比例立刻拉长")
+                }
+            }
         }
         if (lowLight) {
-            recs += Rec(PoseTemplates.byId.getValue("night_portrait"), "光线偏暗，正适合夜景人像")
-        }
-        if (frontFacing) {
-            recs += Rec(PoseTemplates.byId.getValue("mirror_selfie"), "前置镜头，对镜自拍最自然")
+            recs += Rec(PoseTemplates.byId.getValue("head_side"), "光线偏暗，侧脸吃光更有轮廓")
         }
 
-        // 无明确场景信号时，给两条不挑场景的经典款兜底
+        // 兜底：两条不挑景的经典款
         if (recs.isEmpty()) {
-            recs += Rec(PoseTemplates.byId.getValue("stand_tall"), "经典站姿，拍出大长腿")
-            recs += Rec(PoseTemplates.byId.getValue("look_back"), "回眸抓拍，自然又有故事感")
+            recs += Rec(PoseTemplates.byId.getValue("full_sline"), "经典 S 站姿，拍出大长腿")
+            recs += Rec(PoseTemplates.byId.getValue("half_lookback"), "回眸抓拍，自然又有故事感")
         }
 
         val seen = HashSet<String>()
         return recs.filter { seen.add(it.template.id) }.take(3)
     }
-
-    private val CHAIR = setOf("chair")
-    private val BENCH = setOf("bench")
-    private val COUCH = setOf("couch", "sofa", "bed")
 }

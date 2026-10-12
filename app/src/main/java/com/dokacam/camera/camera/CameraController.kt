@@ -211,6 +211,23 @@ class CameraController(private val context: Context) {
         return Pair(zs.minZoomRatio, zs.maxZoomRatio)
     }
 
+    /** 曝光补偿状态快照（index 为当前档位，range 为可用档位区间，step 为每档 EV） */
+    data class ExposureInfo(val index: Int, val range: IntRange, val step: Float)
+
+    fun setExposureCompensationIndex(index: Int): Boolean {
+        val control = camera?.cameraControl ?: return false
+        control.setExposureCompensationIndex(index)
+        return true
+    }
+
+    fun getExposureInfo(): ExposureInfo? = camera?.cameraInfo?.exposureState?.let {
+        ExposureInfo(
+            index = it.exposureCompensationIndex,
+            range = it.exposureCompensationRange.lower..it.exposureCompensationRange.upper,
+            step = it.exposureCompensationStep.toFloat(),
+        )
+    }
+
     private fun newSaveScope() = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     /**
